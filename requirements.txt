@@ -1,0 +1,6 @@
+openai
+pyyaml
+rich
+requests
+pytest
+pytest-asyncio
