@@ -126,7 +126,7 @@ class AthenaAgent:
             
             # Failover logic: fetch next available provider in pool
             try:
-                client_alt, model_alt, provider_alt = providers.get_routing_client()
+                client_alt, model_alt, provider_alt = providers.get_routing_client(skip_providers=[provider])
                 logger.info("Retrying LLM call using fallback: Provider=%s, Model=%s", provider_alt, model_alt)
                 
                 messages_alt = [

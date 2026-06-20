@@ -103,7 +103,7 @@ def get_client_for_provider(provider_name: str) -> tuple[openai.OpenAI, str]:
     )
     return client, model
 
-def get_routing_client() -> tuple[openai.OpenAI, str, str]:
+def get_routing_client(skip_providers: list = None) -> tuple[openai.OpenAI, str, str]:
     """Resolves active client, handling failures and rotation.
     
     Returns (client, model_name, provider_name).
@@ -136,9 +136,20 @@ def get_routing_client() -> tuple[openai.OpenAI, str, str]:
     if copilot_token:
         available.append("github-copilot")
         
-    if not available:
-        raise ValueError("No providers are configured. Please run 'athena onboard' to add credentials.")
+    if skip_providers:
+        available = [p for p in available if p not in skip_providers]
         
+    if not available:
+        if skip_providers:
+            raise ValueError("No alternative providers are configured/available.")
+        else:
+            raise ValueError("No providers are configured. Please run 'athena onboard' to add credentials.")
+        
+    if skip_providers and active_provider in skip_providers:
+        fallback = get_fallback_provider(active_provider, available)
+        if fallback:
+            active_provider = fallback
+            
     # Rotate active provider if failure count is exceeded
     if _failure_counts.get(active_provider, 0) >= 3:
         fallback = get_fallback_provider(active_provider, available)
@@ -158,7 +169,7 @@ def get_routing_client() -> tuple[openai.OpenAI, str, str]:
         logger.error("Failed to build client for '%s': %s. Trying fallback immediately.", active_provider, exc)
         _failure_counts[active_provider] = 3
         # Recurse once to route fallback
-        return get_routing_client()
+        return get_routing_client(skip_providers=skip_providers)
 
 def record_success(provider_name: str):
     _failure_counts[provider_name] = 0
