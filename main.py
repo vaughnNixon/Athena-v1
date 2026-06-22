@@ -210,20 +210,29 @@ def run_onboarding():
     console.print("\n[bold green][OK] Onboarding complete. Settings successfully saved.[/bold green]\n")
 
 def run_chat_loop(project_id: str, session_id: str):
+    from rich.table import Table
+    from providers_manager import get_manager
     setup_logger()
     memory_engine.initialize_db()
     
     # Try fetching Caveman skills in background if they don't exist
     config.fetch_caveman_skills(force=False)
     
-    cfg = config.load_config()
-    active_prov = cfg.get("provider", "gemini")
-    active_model = cfg.get("model", "")
+    mgr = get_manager()
+    active_prov_id = mgr.active_provider_id
+    if active_prov_id:
+        p = mgr.providers.get(active_prov_id)
+        prov_name = p.name if p else active_prov_id
+        model_name = mgr.active_model_override or (p.default_model if p else "")
+    else:
+        healthiest = mgr.get_healthiest_provider()
+        prov_name = f"Auto ({healthiest.name})" if healthiest else "Auto"
+        model_name = mgr.active_model_override or (healthiest.default_model if healthiest else "")
     
     console.print(Panel(
         f"[bold gold3]Athena v1 Interactive Chat Shell[/bold gold3]\n"
         f"[dim]Project Namespace: [cyan]{project_id}[/cyan] | Session: [cyan]{session_id}[/cyan][/dim]\n"
-        f"[dim]Active Provider: [green]{active_prov}[/green] | Model: [green]{active_model}[/green][/dim]\n"
+        f"[dim]Active Provider: [green]{prov_name}[/green] | Model: [green]{model_name}[/green][/dim]\n"
         f"Type [bold red]/quit[/bold red] or [bold red]/exit[/bold red] to end the session.",
         title="Athena v1"
     ))
@@ -253,25 +262,227 @@ def run_chat_loop(project_id: str, session_id: str):
                 console.print(f"[bold {color}]Caveman style toggled {status}.[/bold {color}]")
                 continue
                 
-            if stripped_input.lower() == "/provider":
-                cfg = config.load_config()
-                console.print(f"Current provider: [green]{cfg.get('provider')}[/green] (model: [green]{cfg.get('model')}[/green])")
+            cmd_lower = stripped_input.lower()
+            if cmd_lower == "/providers":
+                mgr = get_manager()
+                table = Table(title="Athena Providers Configuration", title_style="bold gold3")
+                table.add_column("ID", style="cyan")
+                table.add_column("Name", style="bold white")
+                table.add_column("Type", style="green")
+                table.add_column("Default Model", style="yellow")
+                table.add_column("Keys Count", justify="right")
+                table.add_column("Enabled", style="bold")
+                table.add_column("Stats (Success/Fail/Consec)", style="dim")
+                table.add_column("Active", style="bold magenta")
+                
+                for pid, p in mgr.providers.items():
+                    is_active = ""
+                    if mgr.active_provider_id == pid:
+                        is_active = "★"
+                    elif not mgr.active_provider_id:
+                        healthiest = mgr.get_healthiest_provider()
+                        if healthiest and healthiest.id == pid:
+                            is_active = "★ (Auto)"
+                    
+                    status_str = "[green]Yes[/green]" if p.enabled else "[red]No[/red]"
+                    keys_count = len(p.api_keys) if p.api_keys else 0
+                    s = p.stats
+                    stats_str = f"{s['successful_requests']}/{s['failed_requests']}/{s.get('consecutive_failures', 0)}"
+                    
+                    table.add_row(
+                        p.id,
+                        p.name,
+                        p.type,
+                        p.default_model,
+                        str(keys_count),
+                        status_str,
+                        stats_str,
+                        is_active
+                    )
+                console.print(table)
+                if mgr.active_model_override:
+                    console.print(f"[dim]Model override is active: [green]{mgr.active_model_override}[/green]. Use [bold]/model select default[/bold] to clear.[/dim]")
                 continue
                 
-            if stripped_input.lower().startswith("/provider "):
-                new_prov = stripped_input.split(" ", 1)[1].strip().lower()
-                cfg = config.load_config()
-                if new_prov in ["gemini", "openrouter", "openai", "groq", "nvidia", "github-copilot"]:
-                    cfg["provider"] = new_prov
-                    prov_cfg = cfg.get("providers", {}).get(new_prov, {})
-                    if prov_cfg.get("model"):
-                        cfg["model"] = prov_cfg.get("model")
-                    config.save_config(cfg)
-                    console.print(f"[bold green]Switched active provider to {new_prov} (model: {cfg['model']}).[/bold green]")
+            if cmd_lower.startswith("/provider"):
+                mgr = get_manager()
+                parts = stripped_input.split()
+                
+                if len(parts) == 1:
+                    active_p_id = mgr.active_provider_id
+                    active_p = mgr.providers.get(active_p_id) if active_p_id else None
+                    if active_p:
+                        model_name = mgr.active_model_override or active_p.default_model
+                        console.print(f"Current provider: [green]{active_p.name}[/green] (model: [green]{model_name}[/green])")
+                    else:
+                        healthiest = mgr.get_healthiest_provider()
+                        if healthiest:
+                            model_name = mgr.active_model_override or healthiest.default_model
+                            console.print(f"Current provider: [green]Auto ({healthiest.name})[/green] (model: [green]{model_name}[/green])")
+                        else:
+                            console.print("[yellow]No active or healthy provider available.[/yellow]")
+                    continue
+                
+                subcmd = parts[1].lower()
+                
+                if subcmd == "add":
+                    console.print("\n[bold gold3]Add New AI Provider[/bold gold3]")
+                    name = Prompt.ask("Provider Name (e.g. Grok)").strip()
+                    if not name:
+                        console.print("[red]Cancelled: Provider Name is required.[/red]")
+                        continue
+                        
+                    ptype = Prompt.ask("Provider Type", choices=["openai_compatible", "gemini"], default="openai_compatible")
+                    base_url = Prompt.ask("Base URL", default="https://api.x.ai/v1" if ptype == "openai_compatible" else "https://generativelanguage.googleapis.com/v1beta/openai/")
+                    default_model = Prompt.ask("Default Model")
+                    
+                    api_keys = []
+                    console.print("Enter API keys. Press Enter on an empty line when finished:")
+                    while True:
+                        k = Prompt.ask("Add Key", password=True)
+                        if not k:
+                            break
+                        api_keys.append(k.strip())
+                        
+                    new_p = mgr.add_provider(
+                        name=name,
+                        type=ptype,
+                        base_url=base_url,
+                        default_model=default_model,
+                        api_keys=api_keys
+                    )
+                    console.print(f"\n[bold green]Successfully added provider '{new_p.name}' (id: {new_p.id})[/bold green]\n")
+                    continue
+                    
+                elif subcmd == "remove":
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /provider remove <provider_id>[/red]")
+                        continue
+                    pid = parts[2].strip()
+                    if mgr.remove_provider(pid):
+                        console.print(f"[bold green]Provider '{pid}' removed successfully.[/bold green]")
+                    else:
+                        console.print(f"[bold red]Provider '{pid}' not found.[/bold red]")
+                    continue
+                    
+                elif subcmd == "enable":
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /provider enable <provider_id>[/red]")
+                        continue
+                    pid = parts[2].strip()
+                    if mgr.enable_provider(pid, True):
+                        console.print(f"[bold green]Provider '{pid}' enabled.[/bold green]")
+                    else:
+                        console.print(f"[bold red]Provider '{pid}' not found.[/bold red]")
+                    continue
+                    
+                elif subcmd == "disable":
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /provider disable <provider_id>[/red]")
+                        continue
+                    pid = parts[2].strip()
+                    if mgr.enable_provider(pid, False):
+                        console.print(f"[bold green]Provider '{pid}' disabled.[/bold green]")
+                    else:
+                        console.print(f"[bold red]Provider '{pid}' not found.[/bold red]")
+                    continue
+                    
+                elif subcmd == "select":
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /provider select <provider_id|auto>[/red]")
+                        continue
+                    pid = parts[2].strip().lower()
+                    if pid in ("auto", "dynamic"):
+                        mgr.active_provider_id = None
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        console.print("[bold green]Switched active provider selection to Auto (Dynamic Health).[/bold green]")
+                    elif pid in mgr.providers:
+                        mgr.active_provider_id = pid
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        p = mgr.providers[pid]
+                        console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model}).[/bold green]")
+                    else:
+                        import providers
+                        mapped = providers.map_legacy_provider_id(pid)
+                        if mapped in mgr.providers:
+                            mgr.active_provider_id = mapped
+                            mgr.active_model_override = None
+                            mgr.save_providers()
+                            p = mgr.providers[mapped]
+                            console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model}).[/bold green]")
+                        else:
+                            console.print(f"[bold red]Provider '{pid}' not found.[/bold red]")
+                    continue
+                    
                 else:
-                    console.print(f"[bold red]Unknown provider: {new_prov}. Use gemini, openrouter, openai, groq, nvidia, or github-copilot.[/bold red]")
-                continue
+                    pid = parts[1].strip().lower()
+                    if pid in ("auto", "dynamic"):
+                        mgr.active_provider_id = None
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        console.print("[bold green]Switched active provider selection to Auto (Dynamic Health).[/bold green]")
+                    elif pid in mgr.providers:
+                        mgr.active_provider_id = pid
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        p = mgr.providers[pid]
+                        console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model}).[/bold green]")
+                    else:
+                        import providers
+                        mapped = providers.map_legacy_provider_id(pid)
+                        if mapped in mgr.providers:
+                            mgr.active_provider_id = mapped
+                            mgr.active_model_override = None
+                            mgr.save_providers()
+                            p = mgr.providers[mapped]
+                            console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model}).[/bold green]")
+                        else:
+                            console.print(f"[bold red]Unknown provider sub-command or ID: {pid}[/bold red]")
+                    continue
+            
+            if cmd_lower.startswith("/model"):
+                mgr = get_manager()
+                parts = stripped_input.split()
                 
+                if len(parts) == 1:
+                    active_p_id = mgr.active_provider_id
+                    active_p = mgr.providers.get(active_p_id) if active_p_id else mgr.get_healthiest_provider()
+                    if active_p:
+                        model_name = mgr.active_model_override or active_p.default_model
+                        console.print(f"Current active model: [green]{model_name}[/green]")
+                    else:
+                        console.print("[yellow]No active provider available.[/yellow]")
+                    continue
+                    
+                subcmd = parts[1].lower()
+                if subcmd == "select":
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /model select <model_id|default>[/red]")
+                        continue
+                    model_id = parts[2].strip()
+                    if model_id.lower() in ("default", "auto", "reset"):
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        console.print("[bold green]Cleared model override. Using provider's default model.[/bold green]")
+                    else:
+                        mgr.active_model_override = model_id
+                        mgr.save_providers()
+                        console.print(f"[bold green]Model override set to '{model_id}'.[/bold green]")
+                    continue
+                else:
+                    model_id = parts[1].strip()
+                    if model_id.lower() in ("default", "auto", "reset"):
+                        mgr.active_model_override = None
+                        mgr.save_providers()
+                        console.print("[bold green]Cleared model override. Using provider's default model.[/bold green]")
+                    else:
+                        mgr.active_model_override = model_id
+                        mgr.save_providers()
+                        console.print(f"[bold green]Model override set to '{model_id}'.[/bold green]")
+                    continue
+            
             # Process turn
             console.print("[dim]Athena is recalling & thinking...[/dim]", end="\r")
             response = agent.run_one_turn(stripped_input)
@@ -318,17 +529,31 @@ def main():
     setup_logger()
     
     if args.provider:
-        cfg = config.load_config()
+        from providers_manager import get_manager
+        mgr = get_manager()
         prov_name = args.provider.strip().lower()
-        if prov_name in ["gemini", "openrouter", "openai", "groq", "nvidia", "github-copilot"]:
-            cfg["provider"] = prov_name
-            prov_cfg = cfg.get("providers", {}).get(prov_name, {})
-            if prov_cfg.get("model"):
-                cfg["model"] = prov_cfg.get("model")
-            config.save_config(cfg)
-            console.print(f"[bold green]Switched active provider to {prov_name} (model: {cfg['model']})[/bold green]\n")
+        if prov_name in ("auto", "dynamic"):
+            mgr.active_provider_id = None
+            mgr.active_model_override = None
+            mgr.save_providers()
+            console.print("[bold green]Switched active provider selection to Auto (Dynamic Health).[/bold green]\n")
+        elif prov_name in mgr.providers:
+            mgr.active_provider_id = prov_name
+            mgr.active_model_override = None
+            mgr.save_providers()
+            p = mgr.providers[prov_name]
+            console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model})[/bold green]\n")
         else:
-            console.print(f"[bold red]Unknown provider: {prov_name}.[/bold red]\n")
+            import providers
+            mapped = providers.map_legacy_provider_id(prov_name)
+            if mapped in mgr.providers:
+                mgr.active_provider_id = mapped
+                mgr.active_model_override = None
+                mgr.save_providers()
+                p = mgr.providers[mapped]
+                console.print(f"[bold green]Switched active provider to {p.name} (model: {p.default_model})[/bold green]\n")
+            else:
+                console.print(f"[bold red]Unknown provider: {prov_name}. Available providers: {', '.join(mgr.providers.keys())}[/bold red]\n")
             
     if args.command == "doctor":
         diagnostics.run_diagnostics()

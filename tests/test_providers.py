@@ -13,29 +13,33 @@ import providers
 @pytest.fixture(autouse=True)
 def setup_teardown():
     config.ensure_athena_dirs()
-    # Reset failure tracking dictionary in providers
     providers._failure_counts.clear()
+    from providers_manager import ProvidersManager
+    ProvidersManager._instance = None
+    import config as cfg_mod
+    filepath = cfg_mod.get_athena_home() / "providers.json"
+    if filepath.exists():
+        filepath.unlink()
     yield
+    if filepath.exists():
+        filepath.unlink()
 
 def test_get_fallback_provider():
-    available = ["gemini", "openrouter", "openai"]
+    available = ["gemini", "openrouter", "openai-api"]
     
-    # Check fallback chain rotation
     fb1 = providers.get_fallback_provider("gemini", available)
     assert fb1 == "openrouter"
     
     fb2 = providers.get_fallback_provider("openrouter", available)
-    assert fb2 == "openai"
+    assert fb2 == "openai-api"
     
-    fb3 = providers.get_fallback_provider("openai", available)
+    fb3 = providers.get_fallback_provider("openai-api", available)
     assert fb3 == "gemini" # wrap around
     
-    # Handle single choice
-    fb_single = providers.get_fallback_provider("openai", ["openai"])
-    assert fb_single == "openai"
+    fb_single = providers.get_fallback_provider("openai-api", ["openai-api"])
+    assert fb_single == "openai-api"
 
 def test_record_failures_and_rotate():
-    # Save config with gemini as default provider
     cfg = config.load_config()
     cfg["provider"] = "gemini"
     cfg["providers"] = {
@@ -43,6 +47,9 @@ def test_record_failures_and_rotate():
         "openai": {"api_key": "openai_key", "model": "gpt-4o-mini"}
     }
     config.save_config(cfg)
+    
+    from providers_manager import ProvidersManager
+    ProvidersManager._instance = None
     
     # 1. Initially routing client should return gemini
     with patch("openai.OpenAI") as mock_openai_client:
@@ -55,29 +62,30 @@ def test_record_failures_and_rotate():
     providers.record_failure("gemini")
     providers.record_failure("gemini")
     
-    # 3. Next routing attempt should trigger rotation to openai
+    # 3. Next routing attempt should trigger rotation to openai-api
     with patch("openai.OpenAI") as mock_openai_client:
         client, model, prov = providers.get_routing_client()
-        assert prov == "openai"
+        assert prov == "openai-api"
         assert model == "gpt-4o-mini"
-        
-    # Verify saved config has rotated the default provider
-    cfg_reloaded = config.load_config()
-    assert cfg_reloaded.get("provider") == "openai"
 
 def test_routing_client_no_credentials():
-    # Clear any credentials
     cfg = config.load_config()
     cfg["providers"] = {}
     config.save_config(cfg)
     
-    # Mock resolve_copilot_token to return empty
+    from providers_manager import ProvidersManager, get_manager
+    ProvidersManager._instance = None
+    mgr = get_manager()
+    mgr.providers.clear()
+    mgr.save_providers()
+    
     with patch("copilot_auth.resolve_copilot_token", return_value=("", "")):
         with pytest.raises(ValueError, match="No providers are configured"):
             providers.get_routing_client()
 
 def test_get_client_for_provider_openai_oauth():
     cfg = config.load_config()
+    cfg["provider"] = "openai"
     cfg["providers"] = {
         "openai": {
             "auth_type": "oauth",
@@ -86,6 +94,9 @@ def test_get_client_for_provider_openai_oauth():
     }
     config.save_config(cfg)
     
+    from providers_manager import ProvidersManager
+    ProvidersManager._instance = None
+    
     with patch("openai_auth.get_chatgpt_access_token", return_value=("fake_access_token", "fake_acc_id")):
         import codex_transport
         client, model = providers.get_client_for_provider("openai")
@@ -93,3 +104,4 @@ def test_get_client_for_provider_openai_oauth():
         assert isinstance(client, codex_transport.CodexClient)
         assert client.chat.completions.access_token == "fake_access_token"
         assert client.chat.completions.account_id == "fake_acc_id"
+

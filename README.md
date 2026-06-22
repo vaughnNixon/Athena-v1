@@ -36,9 +36,12 @@ graph TD
 - **Reasoning Item Replay**: Tracks opaque, encrypted reasoning blocks (`codex_reasoning_items`) and re-injects them on subsequent turns to maintain chain-of-thought coherence.
 - **Cross-Issuer Filters**: Strips reasoning blobs minted by different endpoints (e.g. xAI vs. Codex) if the session swaps providers, preventing `invalid_encrypted_content` HTTP 400 errors.
 
-### 2. Rotational Failover Router
-- Monitors consecutive request failures.
-- Automatically rotates the active provider in `config.yaml` to the next configured fallback in the chain (Gemini, OpenRouter, OpenAI, Groq, Nvidia, Copilot) after 3 consecutive failures.
+### 2. Universal Provider Manager with Multi-Key Rotation
+- **Schema & Persistence (`providers.json`)**: Configured dynamically; supports registering custom OpenAI-compatible endpoints (Grok, OpenRouter, Together, DeepInfra) without hardcoding.
+- **API Key Rotation**: Automatically rotates to the next API key inside a provider upon any failure (rate limits, timeouts, auth errors, quota exceeded).
+- **Auto-Failover**: Automatically switches to the next healthiest provider in the fallback chain if all keys for a provider are exhausted.
+- **Health Tracking**: Tracks request success/failure stats and consecutive failure rates per key and provider dynamically.
+- **Self-Healing Statistics**: Automatically resets all failure counts as a last resort if all configured options fail, avoiding permanent lockouts from transient outages.
 
 ### 3. SQLite Memory Engine
 - Persists extracted facts and reinforces them on user keyword matches.
@@ -46,15 +49,20 @@ graph TD
 - Prevents database duplication using SHA-256 signature tracking.
 
 ### 4. Context Window Compression Discipline
-- **Caveman turned history summarization**: Triggers automatically when conversational history exceeds 1000 tokens, condensing past turns into sparse, telegraphic prose.
-- **Headroom AI transforms**: Compasses tool outputs and long logs using fast, native compiled token-crushers.
+- Caveman turned history summarization: Triggers automatically when conversational history exceeds 1000 tokens, condensing past turns into sparse, telegraphic prose.
+- Headroom AI transforms: Compasses tool outputs and long logs using fast, native compiled token-crushers.
 
 ### 5. Interactive Setup & CLI Command Shell
-- **Interactive Wizard (`main.py onboard`)**: Walks you through configuring providers and logs into browser or headless OAuth sessions.
+- **Interactive Wizard (`main.py onboard`)**: Walks you through configuring default providers, API keys, or logging into browser/headless OAuth sessions.
 - **Diagnostics (`main.py doctor`)**: Validates folder structures, permissions, and database health metrics.
 - **Slash Commands**:
-  - `/provider <provider_name>`: Switch active models on the fly during a chat session.
-  - `/caveman`: Toggle between caveman style terse response instructions and natural chatbot styling.
+  - `/providers`: Display a formatted Rich table of all registered providers, defaults, key counts, enabled status, active provider, and request metrics.
+  - `/provider add`: Interactive wizard to register a new provider (name, type, base URL, default model, and multiple keys).
+  - `/provider remove <id>`: Deletes a provider from the configuration.
+  - `/provider enable/disable <id>`: Dynamically toggles a provider's active eligibility status.
+  - `/provider select <id|auto>` (shortcut: `/provider <id>`): Manual active override or resets to health-based selection (`auto`).
+  - `/model select <model_id|default>` (shortcut: `/model <model_id>`): Manual model override or resets to provider defaults.
+  - `/caveman`: Toggle between caveman sparse prose style and natural conversational style.
   - `/quit` / `/exit`: Cleanly exit the session.
 
 ---

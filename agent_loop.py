@@ -87,80 +87,55 @@ class AthenaAgent:
         ] + compressed_history
         
         # 5. Execute API call with rotational failover
-        client, model, provider = providers.get_routing_client()
-        logger.info("Executing LLM call using: Provider=%s, Model=%s", provider, model)
+        skip_providers = []
+        skip_keys = {}
         
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.2
-            )
-            msg_obj = response.choices[0].message
-            raw_content = getattr(msg_obj, "content", None)
-            assistant_content = raw_content.strip() if raw_content else "ACK."
-            providers.record_success(provider)
-            
-            # Append success response to history and save
-            history_entry = {"role": "assistant", "content": assistant_content}
-            if getattr(msg_obj, "codex_reasoning_items", None):
-                history_entry["codex_reasoning_items"] = msg_obj.codex_reasoning_items
-            if getattr(msg_obj, "codex_message_items", None):
-                history_entry["codex_message_items"] = msg_obj.codex_message_items
-                
-            self.history.append(history_entry)
-            self._save_history()
-            
-            # 6. Trigger non-blocking distillation worker
-            distillation.enqueue_distillation(
-                user_msg=user_message,
-                agent_msg=assistant_content,
-                scope_ids=[self.project_id]
-            )
-            
-            return assistant_content
-            
-        except Exception as exc:
-            logger.warning("LLM execution failed for provider '%s': %s. Retrying with failover...", provider, exc)
-            providers.record_failure(provider)
-            
-            # Failover logic: fetch next available provider in pool
+        while True:
             try:
-                client_alt, model_alt, provider_alt = providers.get_routing_client(skip_providers=[provider])
-                logger.info("Retrying LLM call using fallback: Provider=%s, Model=%s", provider_alt, model_alt)
+                client, model, provider = providers.get_routing_client(
+                    skip_providers=skip_providers,
+                    skip_keys=skip_keys
+                )
+            except Exception as exc:
+                logger.critical("No providers or keys left to try: %s", exc)
+                raise RuntimeError(f"Athena API call failed on all providers: {exc}") from exc
                 
-                messages_alt = [
-                    {"role": "system", "content": system_prompt}
-                ] + compressed_history
-                
-                response_alt = client_alt.chat.completions.create(
-                    model=model_alt,
-                    messages=messages_alt,
+            logger.info("Executing LLM call using: Provider=%s, Model=%s", provider, model)
+            
+            try:
+                active_key = getattr(client, "key", None)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
                     temperature=0.2
                 )
-                msg_obj_alt = response_alt.choices[0].message
-                raw_content_alt = getattr(msg_obj_alt, "content", None)
-                assistant_content_alt = raw_content_alt.strip() if raw_content_alt else "ACK."
-                providers.record_success(provider_alt)
+                msg_obj = response.choices[0].message
+                raw_content = getattr(msg_obj, "content", None)
+                assistant_content = raw_content.strip() if raw_content else "ACK."
                 
-                history_entry_alt = {"role": "assistant", "content": assistant_content_alt}
-                if getattr(msg_obj_alt, "codex_reasoning_items", None):
-                    history_entry_alt["codex_reasoning_items"] = msg_obj_alt.codex_reasoning_items
-                if getattr(msg_obj_alt, "codex_message_items", None):
-                    history_entry_alt["codex_message_items"] = msg_obj_alt.codex_message_items
+                # Append success response to history and save
+                history_entry = {"role": "assistant", "content": assistant_content}
+                if getattr(msg_obj, "codex_reasoning_items", None):
+                    history_entry["codex_reasoning_items"] = msg_obj.codex_reasoning_items
+                if getattr(msg_obj, "codex_message_items", None):
+                    history_entry["codex_message_items"] = msg_obj.codex_message_items
                     
-                self.history.append(history_entry_alt)
+                self.history.append(history_entry)
                 self._save_history()
                 
-                # Trigger distillation
+                # 6. Trigger non-blocking distillation worker
                 distillation.enqueue_distillation(
                     user_msg=user_message,
-                    agent_msg=assistant_content_alt,
+                    agent_msg=assistant_content,
                     scope_ids=[self.project_id]
                 )
                 
-                return assistant_content_alt
+                return assistant_content
                 
-            except Exception as exc_alt:
-                logger.critical("Critical failover execution failed: %s", exc_alt)
-                raise RuntimeError(f"Athena API call failed on all providers: {exc_alt}") from exc_alt
+            except Exception as exc:
+                logger.warning("LLM execution failed for provider '%s': %s. Retrying with failover...", provider, exc)
+                if active_key:
+                    skip_keys.setdefault(provider, []).append(active_key)
+                else:
+                    skip_providers.append(provider)
+
