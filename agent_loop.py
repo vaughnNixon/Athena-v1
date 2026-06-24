@@ -38,66 +38,126 @@ class AthenaAgent:
             logger.error("Failed to save session history: %s", exc)
 
     def run_one_turn(self, user_message: str, system_message: str = None) -> str:
-        """Executes a single conversational turn with LLM-controlled memory retrieval."""
-        # 1. Build system prompt instructing the LLM that it has a memory retrieval tool
+        """
+        Executes a single conversational turn with LLM-controlled memory retrieval.
+        
+        Flow:
+        1. Call LLM with retrieve_memories tool available (but no memory pre-loaded)
+        2. If LLM calls retrieve_memories tool:
+           a. Execute memory retrieval
+           b. Inject facts into chat history
+           c. Call LLM again with facts present
+        3. If LLM doesn't call tool:
+           a. Return response immediately (no extra latency)
+        """
+        # 1. Build system prompt
         if self.caveman_mode:
             base_system = (
                 "Athena v1 is a memory-first agent.\n"
                 "Defining trait: 'Athena remembers what others forget.'\n"
-                "Athena v1 is NOT a chatbot. It is a long-term memory layer.\n"
-                "Communicate only in terse, telegraphic, sparse prose (Caveman style).\n"
-                "Remove all conversational fillers, intros, and greetings.\n"
-                "You have access to a memory retrieval tool 'retrieve_memories'. If you need to recall past context, preferences, or project details to answer, use it."
+                "You have access to a retrieve_memories tool for searching long-term memory.\n"
+                "Use this tool when you need context about past interactions or project details.\n"
+                "Communicate only in terse, telegraphic, sparse prose (Caveman style)."
             )
         else:
             base_system = (
-                "You are Athena v1, a helpful, friendly, and natural conversational AI assistant with long-term memory capabilities.\n"
+                "You are Athena v1, a helpful, friendly, and natural conversational AI assistant with long-term memory.\n"
                 "Your defining trait is: 'Athena remembers what others forget.'\n"
-                "You have access to a memory retrieval tool 'retrieve_memories'. If the user asks about something you might have in memory (such as past conversations, user preferences, names, or project history), use the tool to retrieve relevant details before answering."
+                "You have access to a retrieve_memories tool that searches your long-term memory.\n"
+                "Call retrieve_memories when you need context about past interactions, user preferences, or project details.\n"
+                "Use memory to seamlessly personalize responses and remember details the user has shared."
             )
         
         if system_message:
             base_system = f"{system_message}\n{base_system}"
-            
+        
         system_prompt = base_system
-            
+        
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
         
         # 3. Apply compression discipline
-        # A. Caveman turn history summarization (triggers if history is > 1000 tokens)
         self.history = athena_compression.run_caveman_summarization(self.history, self.project_id)
-        
-        # B. Headroom dynamic compression (reversibly crushes logs/JSON/RAG chunks)
         compressed_history = athena_compression.compress_history_via_headroom(self.history)
         
-        # Assemble message payload
+        # 4. Assemble message payload
         messages = [
             {"role": "system", "content": system_prompt}
         ] + compressed_history
         
-        # Define memory retrieval tool spec
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "retrieve_memories",
-                    "description": "Retrieve relevant long-term memories, facts, preferences, and project details from the database matching the given query.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "The search query to match against memories."
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            }
-        ]
+        # 5. Execute API call with tool support (FIRST PASS)
+        response = self._call_llm_with_tools(messages=messages)
         
-        # 4. Execute API call with rotational failover
+        # 6. Handle tool calls (if any)
+        if response.get("tool_calls"):
+            # Indicate memory access to the user
+            from rich.console import Console
+            console = Console()
+            console.print("[dim]Athena is recalling memories...[/dim]", end="\r")
+            
+            for tool_call in response["tool_calls"]:
+                if tool_call["name"] == "retrieve_memories":
+                    # Execute memory retrieval
+                    query = tool_call["arguments"].get("query", user_message)
+                    memories_block = retrieval.retrieve_relevant_memories(
+                        query=query,
+                        scope_ids=[self.project_id],
+                        limit=5
+                    )
+                    
+                    # Inject tool result into history
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call["name"],
+                                    "arguments": json.dumps(tool_call["arguments"])
+                                }
+                            }
+                        ]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": memories_block if memories_block else "No relevant memories found."
+                    })
+                    
+                    # Call LLM again with memory context
+                    response = self._call_llm_with_tools(messages=messages)
+        
+        # 7. Extract response content
+        assistant_content = response.get("content", "ACK.")
+        
+        # 8. Save to history and trigger distillation
+        history_entry = {"role": "assistant", "content": assistant_content}
+        if response.get("codex_reasoning_items"):
+            history_entry["codex_reasoning_items"] = response["codex_reasoning_items"]
+        if response.get("codex_message_items"):
+            history_entry["codex_message_items"] = response["codex_message_items"]
+            
+        self.history.append(history_entry)
+        self._save_history()
+        
+        distillation.enqueue_distillation(
+            user_msg=user_message,
+            agent_msg=assistant_content,
+            scope_ids=[self.project_id]
+        )
+        
+        return assistant_content
+
+    def _call_llm_with_tools(self, messages: list, model: str = None, provider: str = None) -> dict:
+        """
+        Execute a single LLM call with tool support.
+        
+        Returns dict with:
+        - content: str (response text, if no tool call)
+        - tool_calls: list (if LLM called tools)
+        """
         skip_providers = []
         skip_keys = {}
         
@@ -108,32 +168,32 @@ class AthenaAgent:
                     skip_keys=skip_keys
                 )
             except Exception as exc:
-                logger.critical("No providers or keys left to try: %s", exc)
+                logger.critical("No providers or keys left: %s", exc)
                 raise RuntimeError(f"Athena API call failed on all providers: {exc}") from exc
-                
-            logger.info("Executing LLM call using: Provider=%s, Model=%s", provider, model)
+            
+            logger.info("Executing LLM call: Provider=%s, Model=%s", provider, model)
             
             try:
+                tools = [get_retrieve_memories_tool_definition()]
                 active_key = getattr(client, "key", None)
                 
-                # Try calling with tools enabled first.
-                # If tool calling is not supported by the provider, fall back to pre-retrieval.
                 try:
                     response = client.chat.completions.create(
                         model=model,
                         messages=messages,
-                        temperature=0.2,
-                        tools=tools
+                        tools=tools,
+                        tool_choice="auto",
+                        temperature=0.2
                     )
                     use_tools = True
                 except Exception as tool_exc:
                     tool_exc_str = str(tool_exc).lower()
-                    if "tool" in tool_exc_str or "function" in tool_exc_str or "unsupported" in tool_exc_str or "400" in tool_exc_str:
+                    if any(term in tool_exc_str for term in ["tool", "function", "unsupported", "400"]):
                         logger.warning("Provider %s does not support tool calling: %s. Falling back to pre-retrieval.", provider, tool_exc)
                         
-                        # Pre-retrieve memories as fallback
+                        user_msg = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
                         memories_block = retrieval.retrieve_relevant_memories(
-                            query=user_message,
+                            query=user_msg,
                             scope_ids=[self.project_id],
                             limit=5
                         )
@@ -153,90 +213,69 @@ class AthenaAgent:
                         raise tool_exc
                 
                 msg_obj = response.choices[0].message
-                tool_calls = getattr(msg_obj, "tool_calls", None) if use_tools else None
-                
-                if tool_calls:
-                    # Indicate memory access to the user
-                    from rich.console import Console
-                    console = Console()
-                    console.print("[dim]Athena is recalling memories...[/dim]", end="\r")
-                    
-                    # Create ephemeral messages log for second completions turn
-                    ephemeral_messages = list(messages)
-                    
-                    # Append assistant message with tool calls
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": msg_obj.content
-                    }
-                    assistant_msg["tool_calls"] = [
-                        {
+                tool_calls_raw = getattr(msg_obj, "tool_calls", None) if use_tools else None
+                tool_calls = []
+                if tool_calls_raw:
+                    for tc in tool_calls_raw:
+                        tool_calls.append({
                             "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        } for tc in tool_calls
-                    ]
-                    ephemeral_messages.append(assistant_msg)
-                    
-                    # Process tool calls
-                    for tool_call in tool_calls:
-                        if tool_call.function.name == "retrieve_memories":
-                            import json
-                            try:
-                                args = json.loads(tool_call.function.arguments)
-                                q = args.get("query", user_message)
-                            except Exception:
-                                q = user_message
-                                
-                            memories_block = retrieval.retrieve_relevant_memories(
-                                query=q,
-                                scope_ids=[self.project_id],
-                                limit=5
-                            )
-                            ephemeral_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": "retrieve_memories",
-                                "content": memories_block or "No memories found."
-                            })
-                            
-                    # Make final LLM completions call
-                    response2 = client.chat.completions.create(
-                        model=model,
-                        messages=ephemeral_messages,
-                        temperature=0.2
-                    )
-                    msg_obj = response2.choices[0].message
+                            "name": tc.function.name,
+                            "arguments": json.loads(tc.function.arguments)
+                        })
                 
-                raw_content = getattr(msg_obj, "content", None)
-                assistant_content = raw_content.strip() if raw_content else "ACK."
+                content = getattr(msg_obj, "content", None)
+                content = content.strip() if content else ""
                 
-                # Append success response to history and save
-                history_entry = {"role": "assistant", "content": assistant_content}
-                if getattr(msg_obj, "codex_reasoning_items", None):
-                    history_entry["codex_reasoning_items"] = msg_obj.codex_reasoning_items
-                if getattr(msg_obj, "codex_message_items", None):
-                    history_entry["codex_message_items"] = msg_obj.codex_message_items
-                    
-                self.history.append(history_entry)
-                self._save_history()
+                codex_reasoning_items = getattr(msg_obj, "codex_reasoning_items", None)
+                codex_message_items = getattr(msg_obj, "codex_message_items", None)
                 
-                # 5. Trigger non-blocking distillation worker
-                distillation.enqueue_distillation(
-                    user_msg=user_message,
-                    agent_msg=assistant_content,
-                    scope_ids=[self.project_id]
-                )
-                
-                return assistant_content
+                res_dict = {
+                    "content": content or "ACK.",
+                    "tool_calls": tool_calls
+                }
+                if codex_reasoning_items:
+                    res_dict["codex_reasoning_items"] = codex_reasoning_items
+                if codex_message_items:
+                    res_dict["codex_message_items"] = codex_message_items
+                return res_dict
                 
             except Exception as exc:
                 logger.warning("LLM execution failed for provider '%s': %s. Retrying with failover...", provider, exc)
+                active_key = getattr(client, "key", None)
                 if active_key:
                     skip_keys.setdefault(provider, []).append(active_key)
                 else:
                     skip_providers.append(provider)
+
+def get_retrieve_memories_tool_definition() -> dict:
+    """
+    Returns the OpenAI-compatible tool definition for memory retrieval.
+    Used by the LLM to request memory search when needed.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "retrieve_memories",
+            "description": (
+                "Retrieve relevant long-term memories based on a query. "
+                "Use this when you need context about past interactions, user preferences, "
+                "project details, or any information stored in your long-term memory. "
+                "Call this tool only if the query genuinely requires past knowledge."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "A concise search query describing what you need to remember. "
+                            "Example: 'what dental clinic project did we start' or 'user budget preferences'"
+                        )
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+
 
