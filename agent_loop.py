@@ -83,8 +83,17 @@ class AthenaAgent:
         self.history = athena_compression.run_caveman_summarization(self.history, self.project_id)
         compressed_history = athena_compression.compress_history_via_headroom(self.history)
         
-        # Filter out caveman turns when caveman is OFF to prevent style mimicking
-        if not self.caveman_mode:
+        # Style isolation: filter history based on the active caveman mode
+        if self.caveman_mode:
+            # When caveman mode is ON, filter out all normal turns to avoid natural-style biasing
+            filtered_history = []
+            for msg in compressed_history:
+                # Keep system messages, tool/assistant turns tagged with caveman, and user messages tagged with caveman
+                if msg.get("caveman") == True or msg.get("role") == "system":
+                    filtered_history.append(msg)
+            compressed_history = filtered_history
+        else:
+            # When caveman mode is OFF, filter out all caveman turns to avoid style mimicking
             filtered_history = []
             i = 0
             while i < len(compressed_history):
