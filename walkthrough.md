@@ -19,7 +19,8 @@ We built and verified the following core components of Athena v1:
 - **Subagent Coordination (`subagents.py`)**: Supports running concurrent subagents tracked inside SQLite workspace tasks and captures subagent findings as reflections.
 - **Interactive Caveman toggling**: Added support for `/caveman` toggle command inside the chat shell to turn Caveman prose style instruction on/off, while ensuring Headroom compression remains permanently enabled for context management.
 - **Normal Chat Mode Default**: Changed default agent conversational behavior to natural chatbot styling (caveman style toggled OFF by default), satisfying the user preference to have normal, natural interactions.
-- **Phatic Bypassing**: Implemented automatic classification of greetings, stopwords, and generic query combinations (e.g. `"hello athena"`, `"who are you"`) to bypass SQLite memory retrieval entirely, reducing response latency and removing misleading "recalling" CLI messages.
+- **LLM-Controlled Memory Retrieval**: Migrated from a hardcoded Python heuristic parser to a native tool-calling architecture. The LLM has access to a `retrieve_memories` tool and dynamically decides when it needs past context, names, or preferences to answer. If it decides it does not need memory (e.g. for greetings or simple inputs), it responds directly in a single turn without database access, reducing latency.
+- **Failover Pre-Retrieval Fallback**: Added a robust fallback mechanism that automatically reverts to pre-retrieval injecting memories if the underlying provider or model endpoint does not support standard tool-calling APIs.
 
 ---
 
