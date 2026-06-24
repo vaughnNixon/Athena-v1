@@ -445,8 +445,13 @@ def run_chat_loop(project_id: str, session_id: str):
                     continue
             
             # Process turn
-            console.print("[dim]Athena is recalling & thinking...[/dim]", end="\r")
+            import retrieval
+            if retrieval.is_phatic_query(stripped_input):
+                console.print("[dim]Athena is thinking...[/dim]", end="\r")
+            else:
+                console.print("[dim]Athena is recalling & thinking...[/dim]", end="\r")
             response = agent.run_one_turn(stripped_input)
+
             
             console.print("\n[bold gold3]Athena[/bold gold3]")
             console.print(response)

@@ -40,11 +40,15 @@ class AthenaAgent:
     def run_one_turn(self, user_message: str, system_message: str = None) -> str:
         """Executes a single conversational turn with Caveman & Headroom compression."""
         # 1. Retrieve memories (this lazily triggers decay updates)
-        memories_block = retrieval.retrieve_relevant_memories(
-            query=user_message, 
-            scope_ids=[self.project_id], 
-            limit=5
-        )
+        if retrieval.is_phatic_query(user_message):
+            memories_block = ""
+        else:
+            memories_block = retrieval.retrieve_relevant_memories(
+                query=user_message, 
+                scope_ids=[self.project_id], 
+                limit=5
+            )
+
         
         # 2. Build system prompt
         if self.caveman_mode:

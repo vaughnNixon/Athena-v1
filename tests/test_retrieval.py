@@ -63,3 +63,14 @@ def test_lazy_decay_evaluation():
     # 5 - (2 * 2.0) = 1.0. If we update updated_at to 3 days ago:
     # 5 - (3 * 2.0) = -1.0. It will definitely be archived.
     conn.close()
+
+def test_is_phatic_query():
+    assert retrieval.is_phatic_query("hello") is True
+    assert retrieval.is_phatic_query("hello athena") is True
+    assert retrieval.is_phatic_query("how's it going?") is True
+    assert retrieval.is_phatic_query("who are you") is True
+    assert retrieval.is_phatic_query("hello athena, u alive?") is True
+    assert retrieval.is_phatic_query("what is Java?") is False
+    assert retrieval.is_phatic_query("tell me about Nixon") is False
+    assert retrieval.is_phatic_query("greetings, how are you?") is True
+
