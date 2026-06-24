@@ -181,3 +181,51 @@ def test_self_healing_reset():
         client, model, prov_id = providers.get_routing_client()
         assert prov_id == "p1"
         assert mgr.get_active_key("p1") == "k1"
+
+def test_onboarding_menu_driven_wizard():
+    from main import run_onboarding
+    from providers_manager import get_manager
+    mgr = get_manager()
+    mgr.providers.clear()
+    mgr.save_providers()
+    
+    prompt_responses = [
+        "2",          # Select Configure OpenAI-compatible Keys
+        "1",          # Sub-menu Select Add new provider
+        "Grok",       # Provider Name
+        "http://x.ai",# Base URL
+        "grok-4",     # Default Model
+        "key1",       # Add key1
+        "key2",       # Add key2
+        "",           # Finish keys (blank entry)
+        "3",          # Sub-menu Select Back to main menu
+        "5"           # Main menu Select Exit Setup Wizard
+    ]
+    
+    with patch("rich.prompt.Prompt.ask", side_effect=prompt_responses):
+        run_onboarding()
+        
+    mgr.load_providers()
+    assert "grok" in mgr.providers
+    grok_p = mgr.providers["grok"]
+    assert grok_p.name == "Grok"
+    assert grok_p.base_url == "http://x.ai"
+    assert grok_p.default_model == "grok-4"
+    assert grok_p.api_keys == ["key1", "key2"]
+    
+    prompt_responses_2 = [
+        "2",          # Select Configure OpenAI-compatible Keys
+        "2",          # Sub-menu select Grok (option 2)
+        "key3",       # Append key3
+        "",           # Finish keys (blank entry)
+        "3",          # Sub-menu Select Back to main menu
+        "5"           # Main menu Select Exit Setup Wizard
+    ]
+    
+    with patch("rich.prompt.Prompt.ask", side_effect=prompt_responses_2):
+        run_onboarding()
+        
+    mgr.load_providers()
+    grok_p = mgr.providers["grok"]
+    assert grok_p.api_keys == ["key1", "key2", "key3"]
+

@@ -28,101 +28,147 @@ def setup_logger():
     )
 
 def run_onboarding():
+    from providers_manager import get_manager
     console.print("\n[bold gold3]Athena v1 — Interactive Setup Wizard[/bold gold3]\n")
     console.print("This wizard will configure your model providers and credentials.\n")
     
-    cfg = config.load_config()
-    env = config.load_env()
+    mgr = get_manager()
     
-    # 1. Choose default provider
-    providers_list = ["gemini", "openrouter", "openai", "groq", "nvidia", "github-copilot"]
-    current_prov = cfg.get("provider", "gemini")
-    
-    prov_choice = Prompt.ask(
-        "Select your active model provider",
-        choices=providers_list,
-        default=current_prov
-    )
-    cfg["provider"] = prov_choice
-    
-    # 2. Keyless GitHub Copilot Authentication
-    if prov_choice == "github-copilot" or Confirm.ask("Would you like to log in to GitHub Copilot for keyless access?"):
-        console.print("\n[bold cyan]Starting GitHub OAuth Device Code Flow...[/bold cyan]")
-        token = copilot_auth.copilot_device_code_login()
-        if token:
-            env_file = config.get_athena_home() / ".env"
-            # Read current env content
-            env_lines = []
-            if env_file.exists():
-                env_lines = env_file.read_text(encoding="utf-8").splitlines()
+    while True:
+        console.print("\n[bold cyan]Main Setup Menu[/bold cyan]")
+        console.print("  [bold cyan]1[/bold cyan]: Configure Gemini Keys")
+        console.print("  [bold cyan]2[/bold cyan]: Configure OpenAI-compatible Keys")
+        console.print("  [bold cyan]3[/bold cyan]: Log in to GitHub Copilot (Keyless)")
+        console.print("  [bold cyan]4[/bold cyan]: Select active default provider")
+        console.print("  [bold cyan]5[/bold cyan]: Exit Setup Wizard")
+        
+        choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5"], default="5")
+        
+        if choice == "5":
+            console.print("\n[bold red]Exiting Setup Wizard.[/bold red]\n")
+            break
             
-            # Remove existing token
-            env_lines = [l for l in env_lines if not l.strip().startswith("COPILOT_GITHUB_TOKEN=")]
-            env_lines.append(f"COPILOT_GITHUB_TOKEN={token}")
-            env_file.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
-            
-            console.print("\n[bold green][OK] GitHub Copilot login successful. Token saved to .env.[/bold green]\n")
-        else:
-            console.print("\n[bold red][FAIL] GitHub Copilot login failed or timed out.[/bold red]\n")
-            
-    # 3. Configure API Keys
-    providers_keys = {
-        "gemini": "GEMINI_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "nvidia": "NVIDIA_API_KEY"
-    }
-    
-    # Only ask to configure keys for standard providers
-    for prov_name, env_name in providers_keys.items():
-        if prov_choice == prov_name or Confirm.ask(f"Configure credentials for provider '{prov_name}'?"):
-            prov_cfg = cfg.get("providers", {}).setdefault(prov_name, {})
-            
-            if prov_name == "openai":
-                # Manually enter API Key
-                current_key = prov_cfg.get("api_key", "") or env.get(env_name, "")
-                masked_display = "****" if current_key else "None"
-                new_key = Prompt.ask(
-                    f"Enter API key for {prov_name} (Current: {masked_display})",
-                    password=True,
-                    default=current_key
-                )
-                if new_key:
-                    prov_cfg["api_key"] = new_key
-                prov_cfg["auth_type"] = "api"
+        elif choice == "3":
+            console.print("\n[bold cyan]Starting GitHub OAuth Device Code Flow...[/bold cyan]")
+            token = copilot_auth.copilot_device_code_login()
+            if token:
+                env_file = config.get_athena_home() / ".env"
+                env_lines = []
+                if env_file.exists():
+                    env_lines = env_file.read_text(encoding="utf-8").splitlines()
                 
-                current_model = prov_cfg.get("model", "") or "gpt-4o-mini"
-                model_choice = Prompt.ask(f"Enter model ID for {prov_name}", default=current_model)
-                prov_cfg["model"] = model_choice
-                if prov_choice == prov_name:
-                    cfg["model"] = model_choice
-
+                env_lines = [l for l in env_lines if not l.strip().startswith("COPILOT_GITHUB_TOKEN=")]
+                env_lines.append(f"COPILOT_GITHUB_TOKEN={token}")
+                env_file.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+                
+                console.print("\n[bold green][OK] GitHub Copilot login successful. Token saved to .env.[/bold green]\n")
             else:
-                current_key = prov_cfg.get("api_key", "") or env.get(env_name, "")
-                masked_display = "****" if current_key else "None"
-                new_key = Prompt.ask(
-                    f"Enter API key for {prov_name} (Current: {masked_display})",
-                    password=True,
-                    default=current_key
-                )
-                if new_key:
-                    prov_cfg["api_key"] = new_key
-                    
-                current_model = prov_cfg.get("model", "")
-                if not current_model:
-                    if prov_name == "gemini": current_model = "gemini-1.5-flash"
-                    elif prov_name == "openrouter": current_model = "google/gemini-flash-1.5-8b"
-                    elif prov_name == "groq": current_model = "llama-3.1-8b-instant"
-                    elif prov_name == "nvidia": current_model = "meta/llama3-70b-instruct"
-                    
-                model_choice = Prompt.ask(f"Enter model ID for {prov_name}", default=current_model)
-                prov_cfg["model"] = model_choice
-                if prov_choice == prov_name:
-                    cfg["model"] = model_choice
+                console.print("\n[bold red][FAIL] GitHub Copilot login failed or timed out.[/bold red]\n")
                 
-    config.save_config(cfg)
-    console.print("\n[bold green][OK] Onboarding complete. Settings successfully saved.[/bold green]\n")
+        elif choice == "4":
+            console.print("\n[bold gold3]Select Active Default Provider[/bold gold3]")
+            active_choices = ["auto"]
+            for pid, p in mgr.providers.items():
+                if p.enabled:
+                    active_choices.append(pid)
+            
+            current_active = mgr.active_provider_id or "auto"
+            selected_active = Prompt.ask("Choose active provider", choices=active_choices, default=current_active)
+            if selected_active == "auto":
+                mgr.active_provider_id = None
+            else:
+                mgr.active_provider_id = selected_active
+            mgr.save_providers()
+            console.print(f"[bold green]Active default provider set to: {selected_active}[/bold green]\n")
+            
+        elif choice in ("1", "2"):
+            ptype = "gemini" if choice == "1" else "openai_compatible"
+            ptype_name = "Gemini" if choice == "1" else "OpenAI-compatible"
+            
+            while True:
+                console.print(f"\n[bold cyan]{ptype_name} Key Configuration[/bold cyan]")
+                
+                # Fetch matching providers
+                matching_providers = [p for p in mgr.providers.values() if p.type == ptype]
+                
+                sub_choices = ["1"]
+                console.print("  [bold cyan]1[/bold cyan]: Add a new provider")
+                
+                for i, p in enumerate(matching_providers, start=2):
+                    sub_idx = str(i)
+                    sub_choices.append(sub_idx)
+                    console.print(f"  [bold cyan]{sub_idx}[/bold cyan]: {p.name} (has {len(p.api_keys)} keys)")
+                    
+                back_idx = str(len(matching_providers) + 2)
+                sub_choices.append(back_idx)
+                console.print(f"  [bold cyan]{back_idx}[/bold cyan]: Back to main menu")
+                
+                sub_choice = Prompt.ask("Choose a sub-option", choices=sub_choices, default=back_idx)
+                
+                if sub_choice == back_idx:
+                    break
+                    
+                elif sub_choice == "1":
+                    console.print(f"\n[bold gold3]Add New {ptype_name} Provider[/bold gold3]")
+                    name = Prompt.ask("Provider Name (e.g. Grok)").strip()
+                    if not name:
+                        console.print("[red]Cancelled: Provider Name is required.[/red]")
+                        continue
+                        
+                    default_url = "https://generativelanguage.googleapis.com/v1beta/openai/" if ptype == "gemini" else "https://api.x.ai/v1"
+                    base_url = Prompt.ask("Base URL", default=default_url)
+                    
+                    default_model_choice = "gemini-2.5-flash" if ptype == "gemini" else "grok-4"
+                    default_model = Prompt.ask("Default Model", default=default_model_choice)
+                    
+                    api_keys = []
+                    console.print("Enter API keys. Press Enter on an empty line when finished:")
+                    while True:
+                        k = Prompt.ask("Add Key", password=True)
+                        if not k:
+                            break
+                        api_keys.append(k.strip())
+                        
+                    new_p = mgr.add_provider(
+                        name=name,
+                        type=ptype,
+                        base_url=base_url,
+                        default_model=default_model,
+                        api_keys=api_keys
+                    )
+                    console.print(f"\n[bold green]Successfully added provider '{new_p.name}' (id: {new_p.id})[/bold green]\n")
+                    
+                else:
+                    selected_idx = int(sub_choice) - 2
+                    p = matching_providers[selected_idx]
+                    
+                    console.print(f"\n[bold gold3]Configure Existing Provider: {p.name}[/bold gold3]")
+                    console.print(f"Base URL: [dim]{p.base_url}[/dim]")
+                    console.print(f"Default Model: [dim]{p.default_model}[/dim]")
+                    console.print(f"Currently has {len(p.api_keys)} keys.")
+                    
+                    api_keys = []
+                    console.print("Enter API keys to append to this provider. Press Enter on an empty line when finished:")
+                    while True:
+                        k = Prompt.ask("Add Key", password=True)
+                        if not k:
+                            break
+                        api_keys.append(k.strip())
+                    
+                    if api_keys:
+                        p.api_keys.extend(api_keys)
+                        for key in api_keys:
+                            if key not in p.key_stats:
+                                p.key_stats[key] = {
+                                    "failures": 0,
+                                    "successes": 0,
+                                    "last_success": None,
+                                    "last_failure": None
+                                }
+                        mgr.save_providers()
+                        console.print(f"\n[bold green]Successfully appended {len(api_keys)} keys to '{p.name}'.[/bold green]\n")
+                    else:
+                        console.print("\n[yellow]No new keys added.[/yellow]\n")
 
 def run_chat_loop(project_id: str, session_id: str):
     from rich.table import Table
