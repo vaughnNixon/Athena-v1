@@ -83,25 +83,5 @@ def test_routing_client_no_credentials():
         with pytest.raises(ValueError, match="No providers are configured"):
             providers.get_routing_client()
 
-def test_get_client_for_provider_openai_oauth():
-    cfg = config.load_config()
-    cfg["provider"] = "openai"
-    cfg["providers"] = {
-        "openai": {
-            "auth_type": "oauth",
-            "model": "gpt-5.5"
-        }
-    }
-    config.save_config(cfg)
-    
-    from providers_manager import ProvidersManager
-    ProvidersManager._instance = None
-    
-    with patch("openai_auth.get_chatgpt_access_token", return_value=("fake_access_token", "fake_acc_id")):
-        import codex_transport
-        client, model = providers.get_client_for_provider("openai")
-        assert model == "gpt-5.5"
-        assert isinstance(client, codex_transport.CodexClient)
-        assert client.chat.completions.access_token == "fake_access_token"
-        assert client.chat.completions.account_id == "fake_acc_id"
+
 

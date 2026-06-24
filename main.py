@@ -80,109 +80,24 @@ def run_onboarding():
             prov_cfg = cfg.get("providers", {}).setdefault(prov_name, {})
             
             if prov_name == "openai":
-                auth_map = {
-                    "browser": "ChatGPT Pro/Plus (browser)",
-                    "headless": "ChatGPT Pro/Plus (headless)",
-                    "api": "Manually enter API Key"
-                }
-                auth_choices = list(auth_map.keys())
-                current_auth_type = prov_cfg.get("auth_type", "api")
-                default_auth = "api"
-                if current_auth_type == "oauth":
-                    default_auth = "browser"
-                
-                console.print("\nOpenAI Authentication Options:")
-                for k, v in auth_map.items():
-                    console.print(f"  [bold cyan]{k}[/bold cyan]: {v}")
-                
-                auth_key = Prompt.ask(
-                    "Select authentication method for OpenAI",
-                    choices=auth_choices,
-                    default=default_auth
+                # Manually enter API Key
+                current_key = prov_cfg.get("api_key", "") or env.get(env_name, "")
+                masked_display = "****" if current_key else "None"
+                new_key = Prompt.ask(
+                    f"Enter API key for {prov_name} (Current: {masked_display})",
+                    password=True,
+                    default=current_key
                 )
-                auth_choice = auth_map[auth_key]
+                if new_key:
+                    prov_cfg["api_key"] = new_key
+                prov_cfg["auth_type"] = "api"
                 
-                if auth_choice == "ChatGPT Pro/Plus (browser)":
-                    import openai_auth
-                    import webbrowser
-                    
-                    state = openai_auth.generate_pkce()[1]
-                    verifier, challenge = openai_auth.generate_pkce()
-                    redirect_uri = f"http://localhost:{openai_auth.PORT}/auth/callback"
-                    auth_url = openai_auth.build_authorize_url(redirect_uri, challenge, state)
-                    
-                    console.print(f"\n[bold cyan]Complete authorization in your browser...[/bold cyan]")
-                    console.print(f"Opening browser to: {auth_url}")
-                    webbrowser.open(auth_url)
-                    
-                    code, err = openai_auth.run_callback_server(state, openai_auth.PORT)
-                    if code:
-                        tokens = openai_auth.exchange_code_for_tokens(code, redirect_uri, verifier)
-                        access = tokens["access_token"]
-                        refresh = tokens["refresh_token"]
-                        expires_in = tokens.get("expires_in", 3600)
-                        account_id = openai_auth.extract_account_id(tokens)
-                        
-                        openai_auth.save_chatgpt_credentials(access, refresh, expires_in, account_id)
-                        prov_cfg["auth_type"] = "oauth"
-                        prov_cfg["model"] = "gpt-5.5"
-                        if prov_choice == prov_name:
-                            cfg["model"] = "gpt-5.5"
-                        console.print("\n[bold green][OK] ChatGPT Pro/Plus authorization successful.[/bold green]\n")
-                    else:
-                        console.print(f"\n[bold red][FAIL] Authorization failed: {err}[/bold red]\n")
-                        
-                elif auth_choice == "ChatGPT Pro/Plus (headless)":
-                    import openai_auth
-                    try:
-                        device_data = openai_auth.initiate_headless_flow()
-                        device_auth_id = device_data["device_auth_id"]
-                        user_code = device_data["user_code"]
-                        interval = max(int(device_data.get("interval", 5)), 1)
-                        
-                        console.print(f"\n  Open this URL in your browser: [bold cyan]https://auth.openai.com/codex/device[/bold cyan]")
-                        console.print(f"  Enter this code: [bold gold3]{user_code}[/bold gold3]")
-                        console.print("\n  Waiting for authorization...", end="", flush=True)
-                        
-                        token_data = openai_auth.poll_headless_token(device_auth_id, user_code, interval)
-                        
-                        tokens = openai_auth.exchange_code_for_tokens(
-                            token_data["authorization_code"],
-                            "https://auth.openai.com/deviceauth/callback",
-                            token_data["code_verifier"]
-                        )
-                        access = tokens["access_token"]
-                        refresh = tokens["refresh_token"]
-                        expires_in = tokens.get("expires_in", 3600)
-                        account_id = openai_auth.extract_account_id(tokens)
-                        
-                        openai_auth.save_chatgpt_credentials(access, refresh, expires_in, account_id)
-                        prov_cfg["auth_type"] = "oauth"
-                        prov_cfg["model"] = "gpt-5.5"
-                        if prov_choice == prov_name:
-                            cfg["model"] = "gpt-5.5"
-                        console.print(" [bold green]✓[/bold green]")
-                        console.print("\n[bold green][OK] ChatGPT Pro/Plus authorization successful.[/bold green]\n")
-                    except Exception as exc:
-                        console.print(f"\n[bold red][FAIL] Headless authorization failed: {exc}[/bold red]\n")
-                else:
-                    # Manually enter API Key
-                    current_key = prov_cfg.get("api_key", "") or env.get(env_name, "")
-                    masked_display = "****" if current_key else "None"
-                    new_key = Prompt.ask(
-                        f"Enter API key for {prov_name} (Current: {masked_display})",
-                        password=True,
-                        default=current_key
-                    )
-                    if new_key:
-                        prov_cfg["api_key"] = new_key
-                    prov_cfg["auth_type"] = "api"
-                    
-                    current_model = prov_cfg.get("model", "") or "gpt-4o-mini"
-                    model_choice = Prompt.ask(f"Enter model ID for {prov_name}", default=current_model)
-                    prov_cfg["model"] = model_choice
-                    if prov_choice == prov_name:
-                        cfg["model"] = model_choice
+                current_model = prov_cfg.get("model", "") or "gpt-4o-mini"
+                model_choice = Prompt.ask(f"Enter model ID for {prov_name}", default=current_model)
+                prov_cfg["model"] = model_choice
+                if prov_choice == prov_name:
+                    cfg["model"] = model_choice
+
             else:
                 current_key = prov_cfg.get("api_key", "") or env.get(env_name, "")
                 masked_display = "****" if current_key else "None"

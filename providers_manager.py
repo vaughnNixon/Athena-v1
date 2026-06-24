@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 logger = logging.getLogger("athena.providers_manager")
 
-_fallback_chain = ["gemini", "openrouter", "openai-api", "openai-oauth", "groq", "nvidia", "github-copilot"]
+_fallback_chain = ["gemini", "openrouter", "openai-api", "groq", "nvidia", "github-copilot"]
 
 def get_fallback_provider(current_provider: str, available_providers: List[str]) -> str:
     try:
@@ -204,15 +204,6 @@ class ProvidersManager:
             api_keys=[openai_key] if openai_key else []
         )
         
-        self.providers["openai-oauth"] = Provider(
-            id="openai-oauth",
-            name="ChatGPT Pro/Plus OAuth",
-            type="openai_oauth",
-            base_url="https://chatgpt.com/backend-api/codex",
-            default_model="gpt-5.5",
-            api_keys=[]
-        )
-        
         self.providers["github-copilot"] = Provider(
             id="github-copilot",
             name="GitHub Copilot",
@@ -223,10 +214,7 @@ class ProvidersManager:
         )
         
         if legacy_active == "openai":
-            if auth_type == "oauth":
-                self.active_provider_id = "openai-oauth"
-            else:
-                self.active_provider_id = "openai-api"
+            self.active_provider_id = "openai-api"
         else:
             self.active_provider_id = legacy_active
             
@@ -280,7 +268,7 @@ class ProvidersManager:
         if self.active_provider_id and self.active_provider_id not in skip_providers:
             active_p = self.providers.get(self.active_provider_id)
             if active_p and active_p.enabled:
-                if active_p.type in ("openai_oauth", "github_copilot"):
+                if active_p.type == "github_copilot":
                     if active_p.stats.get("consecutive_failures", 0) < 3:
                         return active_p
                 else:
@@ -291,7 +279,7 @@ class ProvidersManager:
         best_candidate = None
         best_score = -999999
         for p in candidates:
-            if p.type in ("openai_oauth", "github_copilot"):
+            if p.type == "github_copilot":
                 consecutive_failures = p.stats.get("consecutive_failures", 0)
                 healthy_keys = 1 if consecutive_failures < 3 else 0
                 total_consecutive_failures = consecutive_failures

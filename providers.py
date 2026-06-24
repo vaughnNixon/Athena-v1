@@ -3,12 +3,11 @@ import logging
 import openai
 import config
 import copilot_auth
-import openai_auth
 
 logger = logging.getLogger("athena.providers")
 
 _failure_counts = {}
-_fallback_chain = ["gemini", "openrouter", "openai-api", "openai-oauth", "groq", "nvidia", "github-copilot"]
+_fallback_chain = ["gemini", "openrouter", "openai-api", "groq", "nvidia", "github-copilot"]
 
 def get_fallback_provider(current_provider: str, available_providers: list) -> str:
     try:
@@ -25,10 +24,6 @@ def get_fallback_provider(current_provider: str, available_providers: list) -> s
 
 def map_legacy_provider_id(provider_name: str) -> str:
     if provider_name == "openai":
-        from providers_manager import get_manager
-        mgr = get_manager()
-        if "openai-oauth" in mgr.providers and mgr.active_provider_id == "openai-oauth":
-            return "openai-oauth"
         return "openai-api"
     return provider_name
 
@@ -48,16 +43,7 @@ def get_client_for_provider(provider_id: str, key: str = None) -> tuple:
     if mgr.active_model_override and mgr.active_provider_id == provider_id:
         model = mgr.active_model_override
         
-    if p.type == "openai_oauth":
-        import openai_auth
-        import codex_transport
-        access_token, account_id = openai_auth.get_chatgpt_access_token()
-        if not access_token:
-            raise ValueError("No ChatGPT Pro/Plus OAuth token resolved.")
-        client = codex_transport.CodexClient(access_token, account_id)
-        return client, model
-        
-    elif p.type == "github_copilot":
+    if p.type == "github_copilot":
         raw_token, token_src = copilot_auth.resolve_copilot_token()
         if not raw_token:
             raise ValueError("No GitHub Copilot token resolved.")
@@ -102,7 +88,7 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
     mapped_skips = [map_legacy_provider_id(s) for s in skip_providers]
     
     # Check if there are any configured providers at all
-    configured = [p for p in mgr.providers.values() if p.enabled and (p.api_keys or p.type in ("openai_oauth", "github_copilot"))]
+    configured = [p for p in mgr.providers.values() if p.enabled and (p.api_keys or p.type == "github_copilot")]
     if not configured:
         raise ValueError("No providers are configured. Please run 'athena onboard' to add credentials.")
         
@@ -110,7 +96,7 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
     
     while True:
         # Check what providers are actually available (enabled and not skipped)
-        available = [p.id for p in mgr.providers.values() if p.enabled and p.id not in mapped_skips and (p.api_keys or p.type in ("openai_oauth", "github_copilot"))]
+        available = [p.id for p in mgr.providers.values() if p.enabled and p.id not in mapped_skips and (p.api_keys or p.type == "github_copilot")]
         
         if not available:
             if not reset_attempted:
@@ -135,7 +121,7 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
             else:
                 raise ValueError("No alternative providers are configured/available.")
                 
-        if p.type in ("openai_oauth", "github_copilot"):
+        if p.type == "github_copilot":
             key = None
         else:
             key = mgr.get_active_key(p.id, skip_keys=skip_keys.get(p.id))

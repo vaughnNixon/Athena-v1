@@ -7,7 +7,6 @@ from rich.text import Text
 import config
 import memory_engine
 import copilot_auth
-import openai_auth
 
 console = Console()
 
@@ -90,27 +89,13 @@ def run_diagnostics():
         cfg_key = prov_cfg.get("api_key", "")
         env_key = env.get(env_name, "") or os.environ.get(env_name, "")
         
-        if prov_name == "openai" and prov_cfg.get("auth_type") == "oauth":
-            creds = openai_auth.load_chatgpt_credentials()
-            if creds.get("refresh_token"):
-                source = "keyless (OAuth)"
-                import time
-                expires_diff = creds["expires_at"] - time.time()
-                if expires_diff > 0:
-                    status = f"[green]Available (Expires in {int(expires_diff/60)}m)[/green]"
-                else:
-                    status = "[yellow]Expired (Will Refresh)[/yellow]"
-            else:
-                source = "keyless (OAuth)"
-                status = "[yellow]Not Authenticated[/yellow]"
+        has_key = bool(cfg_key or env_key)
+        if has_key:
+            source = "config.yaml" if cfg_key else f"env ({env_name})"
+            status = "[green]Available (Masked)[/green]"
         else:
-            has_key = bool(cfg_key or env_key)
-            if has_key:
-                source = "config.yaml" if cfg_key else f"env ({env_name})"
-                status = "[green]Available (Masked)[/green]"
-            else:
-                source = "n/a"
-                status = "[yellow]Not Configured[/yellow]"
+            source = "n/a"
+            status = "[yellow]Not Configured[/yellow]"
             
         table_prov.add_row(prov_name, source, status)
         
@@ -142,12 +127,6 @@ def run_diagnostics():
     # Overall summary health statement
     if active_provider == "github-copilot" and not copilot_token:
         console.print("[bold red][WARNING] Critical Warning: Active provider is set to 'github-copilot' but no GitHub token was resolved. Run 'athena onboard' or install GitHub CLI to authenticate.[/bold red]\n")
-    elif active_provider == "openai" and cfg.get("providers", {}).get("openai", {}).get("auth_type") == "oauth":
-        creds = openai_auth.load_chatgpt_credentials()
-        if not creds.get("refresh_token"):
-            console.print("[bold red][WARNING] Critical Warning: Active provider is set to 'openai' with OAuth, but no ChatGPT Pro/Plus token was found. Run 'athena onboard' to authenticate.[/bold red]\n")
-        else:
-            console.print("[bold green][OK] System Health Check Passed. Athena v1 is ready to operate.[/bold green]\n")
     elif active_provider != "github-copilot" and not (cfg.get("providers", {}).get(active_provider, {}).get("api_key") or env.get(providers_keys.get(active_provider, "")) or os.environ.get(providers_keys.get(active_provider, ""))):
          console.print(f"[bold red][WARNING] Critical Warning: Active provider '{active_provider}' is selected but no API key was found in config.yaml or environment.[/bold red]\n")
     else:
