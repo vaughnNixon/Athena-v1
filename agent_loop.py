@@ -161,6 +161,21 @@ class AthenaAgent:
         skip_providers = []
         skip_keys = {}
         
+        # Clean messages payload to keep only standard keys for completions API compatibility
+        cleaned_messages = []
+        for msg in messages:
+            cleaned_msg = {
+                "role": msg.get("role"),
+                "content": msg.get("content")
+            }
+            if "name" in msg:
+                cleaned_msg["name"] = msg["name"]
+            if "tool_calls" in msg:
+                cleaned_msg["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                cleaned_msg["tool_call_id"] = msg["tool_call_id"]
+            cleaned_messages.append(cleaned_msg)
+            
         while True:
             try:
                 client, model, provider = providers.get_routing_client(
@@ -180,7 +195,7 @@ class AthenaAgent:
                 try:
                     response = client.chat.completions.create(
                         model=model,
-                        messages=messages,
+                        messages=cleaned_messages,
                         tools=tools,
                         tool_choice="auto",
                         temperature=0.2
@@ -197,7 +212,7 @@ class AthenaAgent:
                             scope_ids=[self.project_id],
                             limit=5
                         )
-                        fallback_messages = list(messages)
+                        fallback_messages = list(cleaned_messages)
                         if memories_block:
                             sys_msg = fallback_messages[0].copy()
                             sys_msg["content"] = f"{sys_msg['content']}\n\n[ATHENA FALLBACK MEMORY]\n{memories_block}"

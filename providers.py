@@ -102,7 +102,7 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
             if not reset_attempted:
                 logger.warning("All configured providers/keys are exhausted. Resetting failure statistics to retry.")
                 mgr.reset_all_failures()
-                mapped_skips = []
+                mapped_skips = [map_legacy_provider_id(s) for s in skip_providers]
                 skip_keys.clear()
                 reset_attempted = True
                 continue
@@ -114,7 +114,7 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
             if not reset_attempted:
                 logger.warning("All configured providers/keys are exhausted. Resetting failure statistics to retry.")
                 mgr.reset_all_failures()
-                mapped_skips = []
+                mapped_skips = [map_legacy_provider_id(s) for s in skip_providers]
                 skip_keys.clear()
                 reset_attempted = True
                 continue
