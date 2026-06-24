@@ -235,4 +235,52 @@ def test_latency_comparison():
             assert latency < 3.0
 
 
+def test_caveman_mode_filtering():
+    agent = AthenaAgent(project_id="test_proj", session_id="test_sess_filtering")
+    
+    # 1. Turn caveman_mode ON
+    agent.caveman_mode = True
+    
+    mock_client = MagicMock()
+    mock_choice_cave = MagicMock()
+    mock_choice_cave.message.content = "ACK."
+    mock_choice_cave.message.tool_calls = None
+    
+    # Mock completions to return caveman responses
+    mock_client.chat.completions.create.return_value.choices = [mock_choice_cave]
+    
+    with patch("providers.get_routing_client", return_value=(mock_client, "gemini-3-flash", "gemini")):
+        with patch("distillation.enqueue_distillation"):
+            agent.run_one_turn("hello")
+            
+    # Check that both user and assistant entries are tagged with "caveman"
+    assert len(agent.history) == 2
+    assert agent.history[0]["role"] == "user"
+    assert agent.history[0].get("caveman") is True
+    assert agent.history[1]["role"] == "assistant"
+    assert agent.history[1].get("caveman") is True
+    
+    # 2. Toggle caveman_mode OFF
+    agent.caveman_mode = False
+    
+    mock_choice_normal = MagicMock()
+    mock_choice_normal.message.content = "Hello there! How can I help you?"
+    mock_choice_normal.message.tool_calls = None
+    mock_client.chat.completions.create.return_value.choices = [mock_choice_normal]
+    
+    with patch("providers.get_routing_client", return_value=(mock_client, "gemini-3-flash", "gemini")):
+        with patch("distillation.enqueue_distillation"):
+            agent.run_one_turn("how are you?")
+            
+            # Check what messages were sent to LLM for the second turn
+            called_args = mock_client.chat.completions.create.call_args[1]
+            messages = called_args["messages"]
+            
+            # The history sent to LLM should NOT contain the caveman turn at all!
+            assert len(messages) == 2 # System prompt + current user query
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"] == "how are you?"
+
+
+
 
