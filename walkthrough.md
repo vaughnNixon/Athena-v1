@@ -19,6 +19,7 @@ We built and verified the following core components of Athena v1:
 - **Subagent Coordination (`subagents.py`)**: Supports running concurrent subagents tracked inside SQLite workspace tasks and captures subagent findings as reflections.
 - **Interactive Caveman toggling**: Added support for `/caveman` toggle command inside the chat shell to turn Caveman prose style instruction on/off, while ensuring Headroom compression remains permanently enabled for context management.
 - **Normal Chat Mode Default**: Changed default agent conversational behavior to natural chatbot styling (caveman style toggled OFF by default), satisfying the user preference to have normal, natural interactions.
+- **Phatic Bypassing**: Implemented automatic classification of greetings, stopwords, and generic query combinations (e.g. `"hello athena"`, `"who are you"`) to bypass SQLite memory retrieval entirely, reducing response latency and removing misleading "recalling" CLI messages.
 
 ---
 
