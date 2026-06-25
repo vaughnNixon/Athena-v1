@@ -19,6 +19,11 @@ memory:
   active_token_budget: 50000
   demotion_frequency: "daily"
   orphan_threshold: 10000
+  keyword_confidence_threshold: 0.6
+  embedding_enabled: false
+  embedding_provider: "gemini"
+  embedding_top_k: 3
+  desperation_enabled: true
   compression:
     caveman_threshold_tokens: 1000
     headroom_max_injection_tokens: 500

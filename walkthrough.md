@@ -157,3 +157,28 @@ All **50 tests** are passing successfully:
 ```powershell
 ============================= 50 passed in 5.35s ==============================
 ```
+
+---
+
+## 8. Athena v1.1 — Prompt 4: Intelligent Memory Retrieval Engine
+
+We have successfully implemented and verified the next-generation staged memory retrieval engine (`retrieval.py`) with cached embedding vectors inside a separate database table.
+
+### Staged Retrieval Architecture
+- **Stage 0: Query Intent Classifier (`classify_query_intent`)**: Uses word boundary token matching to categorize user queries (e.g. `preferences`, `projects`, `timeline`, `people`, `tasks`, `technical`, `past_events`) without substring false-positives.
+- **Stage 1: Active Keyword Search**: Fast-path keyword overlap search across `active` and `mixed` chunks. Computes confidence and returns immediately if above the configured threshold.
+- **Stage 2: Passive Keyword Search**: Expands search into the `passive` memory layer if Active results fall below threshold.
+- **Stage 3: Semantic Retrieval (Cosine Similarity & separate DB caching)**:
+  - Intercepts semantic queries only when `embedding_enabled` is active.
+  - Queries a dedicated `chunk_embeddings` table (`(chunk_id, provider, model)` PRIMARY KEY) to load cached vectors as binary `BLOB` fields, avoiding expensive duplicate LLM api calls.
+  - Automatically generates and caches embedding vectors for any uncached chunks using routed API clients, supporting multiple providers and models.
+- **Stage 4: Desperation Mode**: Automatically triggers if the user signals error (e.g. contains `"wrong"`, `"incorrect"`) or all keyword/semantic stages return low confidence, searching all database chunks.
+- **Stage 5: Non-Hallucinatory Fallback**: Guarantees Athena returns `"I couldn't find a reliable memory for that request."` instead of fabricating or hallucinating text.
+
+### Test Verification
+Added **5 unit tests** in [tests/test_retrieval_staged.py](file:///C:/Users/nixon/Documents/antigravity/wise-maxwell/tests/test_retrieval_staged.py) covering intent classification, staged fast-paths and passive fallbacks, desperation mode triggers, empty database safe fallbacks, and semantic search mock clients verifying SQLite binary caching works exactly as designed.
+
+All **55 tests** are passing successfully:
+```powershell
+============================= 55 passed in 8.65s ==============================
+```

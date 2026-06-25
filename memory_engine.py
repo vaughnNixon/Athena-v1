@@ -113,6 +113,19 @@ def initialize_db():
                     migration_notes TEXT
                 )
             """)
+            # Create chunk embeddings table for semantic cached storage
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_embeddings (
+                    chunk_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    embedding BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(chunk_id, provider, model),
+                    FOREIGN KEY(chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE
+                )
+            """)
             
             # Indexes for facts
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_hash ON facts(fact_hash)")
