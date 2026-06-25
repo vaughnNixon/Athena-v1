@@ -17,6 +17,8 @@ def get_db_connection():
     conn = sqlite3.connect(db_path)
     # Enable WAL mode for concurrency and performance
     conn.execute("PRAGMA journal_mode=WAL")
+    # Enable foreign key constraint enforcement
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 def initialize_db():
@@ -47,8 +49,82 @@ def initialize_db():
                     updated_at INTEGER NOT NULL
                 )
             """)
+            # Create chunks table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tier TEXT NOT NULL CHECK(tier IN ('active', 'passive', 'mixed', 'unclassified')),
+                    raw_text TEXT NOT NULL,
+                    caveman_text TEXT NOT NULL,
+                    start_ts INTEGER NOT NULL,
+                    end_ts INTEGER NOT NULL,
+                    char_count INTEGER NOT NULL,
+                    token_estimate INTEGER NOT NULL,
+                    metadata TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    migrated_from_fact_id INTEGER,
+                    FOREIGN KEY(migrated_from_fact_id) REFERENCES facts(id) ON DELETE SET NULL
+                )
+            """)
+            # Create normalized chunk keywords table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_keywords (
+                    chunk_id INTEGER NOT NULL,
+                    keyword TEXT NOT NULL,
+                    PRIMARY KEY (chunk_id, keyword),
+                    FOREIGN KEY(chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE
+                )
+            """)
+            # Create skip marks table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS skip_marks (
+                    skip_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chunk_id INTEGER NOT NULL,
+                    query_type TEXT NOT NULL,
+                    skip_score REAL NOT NULL CHECK(skip_score >= 0.0 AND skip_score <= 1.0),
+                    feedback_count INTEGER DEFAULT 0,
+                    last_updated_ts INTEGER NOT NULL,
+                    FOREIGN KEY(chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+                    UNIQUE(chunk_id, query_type)
+                )
+            """)
+            # Create feedback log table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feedback_log (
+                    feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_query TEXT NOT NULL,
+                    athena_answer_summary TEXT NOT NULL,
+                    user_correction_text TEXT NOT NULL,
+                    chunks_used_in_answer TEXT NOT NULL,
+                    chunks_used_in_desperation TEXT NOT NULL,
+                    was_helpful INTEGER CHECK(was_helpful IN (0, 1)),
+                    timestamp INTEGER NOT NULL
+                )
+            """)
+            # Create schema metadata table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_metadata (
+                    table_name TEXT PRIMARY KEY,
+                    schema_version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    migrated_at INTEGER,
+                    migration_notes TEXT
+                )
+            """)
+            
+            # Indexes for facts
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_hash ON facts(fact_hash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_archived ON facts(archived)")
+            
+            # Indexes for chunks
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_tier ON chunks(tier)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_timestamps ON chunks(start_ts, end_ts)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_migrated_from ON chunks(migrated_from_fact_id)")
+            
+            # Indexes for chunk keywords
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunk_keywords_val ON chunk_keywords(keyword)")
+            
     except Exception as exc:
         logger.error("Failed to initialize SQLite database: %s", exc)
     finally:
@@ -209,3 +285,173 @@ def get_diagnostics_stats() -> dict:
     finally:
         conn.close()
     return stats
+
+def get_migration_progress() -> dict:
+    """
+    Returns statistics on the facts-to-chunks migration progress:
+    - total_facts: Total rows in the legacy 'facts' table
+    - migrated_facts: Number of legacy facts already in the 'chunks' table
+    - remaining_facts: Facts that still need migration
+    - percentage_complete: Progress percentage (0.0 to 100.0)
+    """
+    initialize_db()
+    conn = get_db_connection()
+    stats = {
+        "total_facts": 0,
+        "migrated_facts": 0,
+        "remaining_facts": 0,
+        "percentage_complete": 100.0
+    }
+    try:
+        cursor = conn.cursor()
+        
+        # Total legacy facts
+        cursor.execute("SELECT COUNT(*) FROM facts")
+        stats["total_facts"] = cursor.fetchone()[0]
+        
+        # Migrated facts count
+        cursor.execute("SELECT COUNT(DISTINCT migrated_from_fact_id) FROM chunks WHERE migrated_from_fact_id IS NOT NULL")
+        stats["migrated_facts"] = cursor.fetchone()[0]
+        
+        stats["remaining_facts"] = max(0, stats["total_facts"] - stats["migrated_facts"])
+        if stats["total_facts"] > 0:
+            stats["percentage_complete"] = round((stats["migrated_facts"] / stats["total_facts"]) * 100.0, 2)
+        else:
+            stats["percentage_complete"] = 100.0
+            
+    except Exception as exc:
+        logger.error("Failed to fetch migration progress: %s", exc)
+    finally:
+        conn.close()
+    return stats
+
+def migrate_legacy_facts() -> dict:
+    """
+    Idempotent and resumable transaction-wrapped facts migration to chunk system.
+    """
+    initialize_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. Fetch initial progress
+    progress = get_migration_progress()
+    if progress["remaining_facts"] == 0:
+        return progress
+        
+    # 2. Query facts that have NOT been migrated yet
+    cursor.execute("""
+        SELECT id, fact, category, importance, confidence, decay_rate, mention_count, scope_ids, archived, created_at, updated_at
+        FROM facts f
+        WHERE NOT EXISTS (
+            SELECT 1 FROM chunks c WHERE c.migrated_from_fact_id = f.id
+        )
+        ORDER BY id ASC
+    """)
+    facts_to_migrate = cursor.fetchall()
+    
+    new_migrated_count = 0
+    now_ts = int(time.time())
+    
+    try:
+        # Wrap everything in a single transaction
+        with conn:
+            for row in facts_to_migrate:
+                (fact_id, fact_text, category, importance, confidence, 
+                 decay_rate, mention_count, scope_ids_json, archived, created_at, updated_at) = row
+                 
+                # tier defaults to 'unclassified' for all migrated legacy facts
+                tier = "unclassified"
+                
+                # Deterministic caveman conversion fallback
+                words = fact_text.split()
+                fillers = {"the", "a", "an", "is", "are", "was", "were", "to", "of", "and", "in", "on", "at", "for"}
+                caveman_words = [w.upper() for w in words if w.lower() not in fillers]
+                caveman_text = " ".join(caveman_words) if caveman_words else fact_text.upper()
+                
+                # Extract keywords (words > 2 chars, lowercase, stripped of non-alphanumeric chars)
+                words_cleaned = re.findall(r"\w+", fact_text.lower())
+                keywords_set = set(w for w in words_cleaned if len(w) > 2)
+                
+                # Add category keywords
+                if category:
+                    for cat in category.split(","):
+                        cat_clean = cat.strip().lower()
+                        if cat_clean:
+                            keywords_set.add(cat_clean)
+                            
+                # Add scope keywords
+                try:
+                    scopes = json.loads(scope_ids_json)
+                    if isinstance(scopes, list):
+                        for s in scopes:
+                            s_clean = s.strip().lower()
+                            if s_clean:
+                                keywords_set.add(s_clean)
+                except Exception:
+                    pass
+                
+                # Future-proof metadata with reserved keys
+                metadata_dict = {
+                    "workspace": None,
+                    "project": None,
+                    "skill": None,
+                    "annotation": None,
+                    "legacy_category": category,
+                    "legacy_importance": importance,
+                    "legacy_confidence": confidence,
+                    "legacy_decay_rate": decay_rate,
+                    "legacy_mention_count": mention_count,
+                    "legacy_scope_ids": scope_ids_json
+                }
+                
+                char_count = len(fact_text)
+                token_estimate = char_count // 4
+                
+                # 1. Insert core chunk
+                cursor.execute("""
+                    INSERT INTO chunks (
+                        tier, raw_text, caveman_text, start_ts, end_ts, 
+                        char_count, token_estimate, metadata, created_at, updated_at, migrated_from_fact_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    tier, fact_text, caveman_text, created_at, updated_at,
+                    char_count, token_estimate, json.dumps(metadata_dict), created_at, updated_at, fact_id
+                ))
+                chunk_id = cursor.lastrowid
+                
+                # 2. Insert normalized keywords into chunk_keywords table
+                for kw in sorted(list(keywords_set)):
+                    cursor.execute("""
+                        INSERT INTO chunk_keywords (chunk_id, keyword)
+                        VALUES (?, ?)
+                    """, (chunk_id, kw))
+                    
+                new_migrated_count += 1
+                
+            # 3. Update schema_metadata status for facts (deprecated) and chunks (active)
+            cursor.execute("""
+                INSERT INTO schema_metadata (table_name, schema_version, status, migrated_at, migration_notes)
+                VALUES ('facts', 1, 'deprecated', ?, ?)
+                ON CONFLICT(table_name) DO UPDATE SET
+                    status='deprecated',
+                    migrated_at=excluded.migrated_at,
+                    migration_notes=excluded.migration_notes
+            """, (now_ts, f"Migrated {new_migrated_count} facts successfully."))
+            
+            cursor.execute("""
+                INSERT INTO schema_metadata (table_name, schema_version, status, migrated_at, migration_notes)
+                VALUES ('chunks', 1, 'active', ?, 'New chunk memory system active.')
+                ON CONFLICT(table_name) DO UPDATE SET
+                    status='active',
+                    migrated_at=excluded.migrated_at,
+                    migration_notes=excluded.migration_notes
+            """, (now_ts,))
+            
+        logger.info("Migrated %d facts to the new chunk-based memory architecture.", new_migrated_count)
+    except Exception as exc:
+        logger.error("Migration failed and transaction was rolled back: %s", exc)
+        raise exc
+    finally:
+        conn.close()
+        
+    return get_migration_progress()
