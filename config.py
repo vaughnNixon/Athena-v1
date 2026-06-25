@@ -16,6 +16,9 @@ memory:
     keyword: 1.0
     importance: 1.0
     confidence: 1.0
+  active_token_budget: 50000
+  demotion_frequency: "daily"
+  orphan_threshold: 10000
   compression:
     caveman_threshold_tokens: 1000
     headroom_max_injection_tokens: 500

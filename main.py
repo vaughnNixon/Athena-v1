@@ -176,6 +176,12 @@ def run_chat_loop(project_id: str, session_id: str):
     setup_logger()
     memory_engine.initialize_db()
     
+    import memory_sweep
+    try:
+        memory_sweep.run_memory_sweep()
+    except Exception as e:
+        logger.error("Failed to run startup memory sweep: %s", e)
+    
     # Try fetching Caveman skills in background if they don't exist
     config.fetch_caveman_skills(force=False)
     
@@ -476,7 +482,7 @@ def show_logs(lines: int = 40):
 
 def main():
     parser = argparse.ArgumentParser(description="Athena v1: The Memory-First AI Agent.")
-    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs"], help="Command to run")
+    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep"], help="Command to run")
     parser.add_argument("--project", default="default", help="Project namespace scope (default: default)")
     parser.add_argument("--session", default="session_1", help="Session ID (default: session_1)")
     parser.add_argument("--lines", type=int, default=40, help="Number of log lines to show (default: 40)")
@@ -524,6 +530,14 @@ def main():
         run_onboarding()
     elif args.command == "logs":
         show_logs(args.lines)
+    elif args.command == "sweep":
+        import memory_sweep
+        console.print("[bold cyan]Running memory sweep...[/bold cyan]")
+        try:
+            memory_sweep.run_memory_sweep()
+            console.print("[bold green][OK] Memory sweep completed successfully.[/bold green]")
+        except Exception as exc:
+            console.print(f"[bold red][FAIL] Memory sweep failed: {exc}[/bold red]")
     elif args.command == "chat":
         run_chat_loop(args.project, args.session)
 

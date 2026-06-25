@@ -133,3 +133,27 @@ All **45 tests** are passing successfully:
 ============================= 45 passed in 4.96s ==============================
 ```
 
+---
+
+## 7. Athena v1.1 — Prompt 3: Active / Passive Memory Management Engine
+
+We have successfully implemented and verified the memory lifecycle sweep engine (`memory_sweep.py`) with a generic, pluggable scoring model.
+
+### Key Lifecycle Features
+- **Pluggable Scoring Policy**: Designed the sweep loop to be completely decoupled from the scoring algorithm. Chunks are evaluated using an interface class `ScoringPolicy` where scores are computed and then sorted.
+- **Chronological Scoring Policy (v1)**: Implemented `ChronologicalScoringPolicy` returning sequence numbers as scores (newest chunks prioritized first).
+- **Working Memory Budget**: Enforces a configurable `active_token_budget` (default `50000` tokens) utilizing stored database `token_estimate` values without recalculation.
+- **Mixed Boundary Annotations**: Chunks are never split to fit the budget. Chunks that cross the budget boundary are marked as `mixed`, with detailed boundary annotation written directly to the `"annotation"` field of the metadata JSON.
+- **Chronological Demotions**: All chunks beyond the budget limit are demoted to the `passive` tier, preserving chronology (older chunks are demoted first).
+- **Auto & Manual Swings**: 
+  - Exposed manual CLI execution: `python main.py sweep`
+  - Integrated automatic triggers: The sweep runs transparently whenever a chat loop session is initialized in `main.py`.
+- **Idempotency**: Implemented strict DB-update validation that prevents any query execution on repeated sweeps with the same memory states.
+
+### Test Verification
+Added **3 comprehensive unit tests** in [tests/test_memory_sweep.py](file:///C:/Users/nixon/Documents/antigravity/wise-maxwell/tests/test_memory_sweep.py) checking unclassified chunk promotion, chronological passive demotions, boundary mixed annotations, token budget overflowing limits, and idempotency states.
+
+All **50 tests** are passing successfully:
+```powershell
+============================= 50 passed in 5.35s ==============================
+```
