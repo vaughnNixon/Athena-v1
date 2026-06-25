@@ -27,6 +27,39 @@ LLM_ENRICH_SYSTEM_PROMPT = (
     "}"
 )
 
+LLM_BATCH_ENRICH_SYSTEM_PROMPT = (
+    "You are a precise long-term memory enrichment engine.\n"
+    "Your objective: Analyze the provided list of conversation chunks and return a JSON array containing precisely the enrichment metadata for each chunk in order.\n"
+    "You must respond with a valid raw JSON array ONLY. Each element in the array must be an object containing precisely three keys:\n"
+    "1. 'caveman_text': a compressed, telegraphic summary of the corresponding conversation chunk. Preserve names, numbers, technologies, and projects. Remove fillers, articles, and unnecessary words.\n"
+    "2. 'keywords': a JSON list of 5 to 10 meaningful keywords (entities, technical terms, project names, important nouns/verbs) extracted from that chunk.\n"
+    "3. 'annotations': a JSON object with optional keys: 'entities' (list), 'projects' (list), 'technologies' (list), 'themes' (list).\n\n"
+    "Example format for a batch of 2 chunks:\n"
+    "[\n"
+    "  {\n"
+    "    \"caveman_text\": \"user prefer python backend. oauth rotation implemented.\",\n"
+    "    \"keywords\": [\"python\", \"backend\", \"oauth\", \"rotation\"],\n"
+    "    \"annotations\": {\n"
+    "      \"entities\": [\"user\"],\n"
+    "      \"projects\": [\"oauth rotation\"],\n"
+    "      \"technologies\": [\"python\"],\n"
+    "      \"themes\": [\"backend development\"]\n"
+    "    }\n"
+    "  },\n"
+    "  {\n"
+    "    \"caveman_text\": \"dentists database project started.\",\n"
+    "    \"keywords\": [\"dentists\", \"database\", \"project\"],\n"
+    "    \"annotations\": {\n"
+    "      \"entities\": [\"dentists\"],\n"
+    "      \"projects\": [\"dentists database\"],\n"
+    "      \"technologies\": [\"sqlite\"],\n"
+    "      \"themes\": [\"data storage\"]\n"
+    "    }\n"
+    "  }\n"
+    "]"
+)
+
+
 def detect_sentences(text: str) -> list[str]:
     """
     Splits text into sentences, avoiding splits on decimals, URLs, version numbers,
@@ -366,6 +399,107 @@ def enrich_chunk_with_llm(chunk_text: str) -> dict:
                 
     return fallback_enrich_chunk(chunk_text)
 
+def enrich_chunks_batch(chunks_text_list: list[str]) -> list[dict]:
+    """
+    Enriches a batch of conversation chunks in a single LLM request to reduce latency and API cost.
+    Returns a list of enrichment dicts.
+    If the batch request fails or returns invalid data, returns None to indicate individual fallback is required.
+    """
+    if not chunks_text_list:
+        return []
+        
+    skip_providers = []
+    skip_keys = {}
+    
+    # Format chunks for prompt
+    formatted_chunks = []
+    for idx, text in enumerate(chunks_text_list):
+        formatted_chunks.append(f"--- CHUNK {idx} ---\n{text}")
+    chunks_payload = "\n\n".join(formatted_chunks)
+    
+    prompt = (
+        "Analyze the list of conversation chunks below and return a JSON array containing the enrichment metadata objects for each chunk in order.\n\n"
+        f"Conversation Chunks:\n{chunks_payload}"
+    )
+    
+    while True:
+        try:
+            client, model, provider = providers.get_routing_client(
+                skip_providers=skip_providers,
+                skip_keys=skip_keys
+            )
+        except Exception as exc:
+            logger.warning("No healthy providers available for LLM batch enrichment: %s. Falling back to individual enrichment.", exc)
+            return None
+            
+        logger.info("Enriching batch of %d chunks via provider=%s model=%s", len(chunks_text_list), provider, model)
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": LLM_BATCH_ENRICH_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            content = response.choices[0].message.content
+            providers.record_success(provider)
+            
+            try:
+                data = json.loads(content)
+                if not isinstance(data, list):
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            if isinstance(v, list):
+                                data = v
+                                break
+                    if not isinstance(data, list):
+                        raise ValueError("LLM batch output is not a JSON list")
+                        
+                if len(data) != len(chunks_text_list):
+                    raise ValueError(f"Batch count mismatch: expected {len(chunks_text_list)} items, got {len(data)}")
+                    
+                enrichments = []
+                for item in data:
+                    caveman = item.get("caveman_text", "")
+                    keywords = item.get("keywords", [])
+                    annotations = item.get("annotations", {})
+                    
+                    if not caveman or not isinstance(keywords, list):
+                        raise ValueError("Batch list item missing caveman_text or keywords list")
+                        
+                    meta = {
+                        "workspace": None,
+                        "project": None,
+                        "skill": None,
+                        "annotation": None,
+                        "enrichment_type": "llm_batch",
+                        "llm_provider": provider,
+                        "llm_model": model
+                    }
+                    if isinstance(annotations, dict):
+                        meta.update(annotations)
+                        
+                    enrichments.append({
+                        "caveman_text": caveman.strip(),
+                        "keywords": [str(k).strip() for k in keywords if str(k).strip()],
+                        "metadata": meta
+                    })
+                return enrichments
+                
+            except Exception as parse_exc:
+                logger.warning("LLM batch output parsing failed: %s. Output: %r", parse_exc, content)
+                raise parse_exc
+                
+        except Exception as exc:
+            logger.warning("Batch enrichment failed on provider %s: %s. Retrying with failover...", provider, exc)
+            active_key = getattr(client, "key", None)
+            if active_key:
+                skip_keys.setdefault(provider, []).append(active_key)
+            else:
+                skip_providers.append(provider)
+
 def process_conversation_to_chunks(messages: list[dict], target_chunk_size: int = 16000) -> list[int]:
     """
     Splits, merges, enriches, and stores a completed conversation as chronological database chunks.
@@ -380,20 +514,30 @@ def process_conversation_to_chunks(messages: list[dict], target_chunk_size: int 
     if not raw_chunks:
         return []
         
+    raw_texts = [c["raw_text"] for c in raw_chunks]
+    
+    # Try batch enrichment first
+    enrichments = enrich_chunks_batch(raw_texts)
+    
+    # Fallback to individual chunk enrichment if batch fails
+    if enrichments is None:
+        logger.info("Batch enrichment failed or was unavailable; falling back to individual chunk enrichment.")
+        enrichments = []
+        for raw_text in raw_texts:
+            enrichments.append(enrich_chunk_with_llm(raw_text))
+            
     chunk_ids = []
     conn = memory_engine.get_db_connection()
     try:
         with conn:
             cursor = conn.cursor()
             
-            for chunk_data in raw_chunks:
+            for chunk_data, enrichment in zip(raw_chunks, enrichments):
                 raw_text = chunk_data["raw_text"]
                 start_ts = chunk_data["start_ts"]
                 end_ts = chunk_data["end_ts"]
                 char_count = chunk_data["char_count"]
                 token_estimate = char_count // 4
-                
-                enrichment = enrich_chunk_with_llm(raw_text)
                 
                 caveman_text = enrichment["caveman_text"]
                 keywords = enrichment["keywords"]
@@ -434,5 +578,6 @@ def process_conversation_to_chunks(messages: list[dict], target_chunk_size: int 
         raise exc
     finally:
         conn.close()
+
         
     return chunk_ids

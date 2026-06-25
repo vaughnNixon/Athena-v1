@@ -158,3 +158,84 @@ def test_process_conversation_to_chunks_saves_to_db():
         assert kws == ["backend", "python"]
     finally:
         conn.close()
+
+def test_enrich_chunks_batch_success():
+    mock_client = MagicMock()
+    mock_choice = MagicMock()
+    mock_message = MagicMock()
+    
+    mock_json_content = json.dumps([
+        {
+            "caveman_text": "user prefer python backend.",
+            "keywords": ["python", "backend"],
+            "annotations": {
+                "entities": ["user"],
+                "technologies": ["python"]
+            }
+        },
+        {
+            "caveman_text": "oauth rotation implemented.",
+            "keywords": ["oauth", "rotation"],
+            "annotations": {
+                "projects": ["oauth rotation"]
+            }
+        }
+    ])
+    mock_message.content = mock_json_content
+    mock_choice.message = mock_message
+    mock_client.chat.completions.create.return_value.choices = [mock_choice]
+    
+    with patch("providers.get_routing_client", return_value=(mock_client, "mock-model", "mock-provider")):
+        enrichments = chunk_pipeline.enrich_chunks_batch(["chunk 1 text", "chunk 2 text"])
+        
+    assert len(enrichments) == 2
+    assert enrichments[0]["caveman_text"] == "user prefer python backend."
+    assert enrichments[1]["caveman_text"] == "oauth rotation implemented."
+    assert "python" in enrichments[0]["keywords"]
+    assert "oauth" in enrichments[1]["keywords"]
+    assert enrichments[0]["metadata"]["enrichment_type"] == "llm_batch"
+
+def test_process_conversation_to_chunks_batch_flow():
+    messages = [
+        {"role": "user", "content": "I prefer Python. What do you think?", "timestamp": 1000},
+        {"role": "assistant", "content": "Python is excellent for backend.", "timestamp": 1010}
+    ]
+    
+    mock_enrichments = [
+        {
+            "caveman_text": "user prefer python. python excellent backend.",
+            "keywords": ["python", "backend"],
+            "metadata": {
+                "workspace": None,
+                "project": None,
+                "skill": None,
+                "annotation": None,
+                "enrichment_type": "mocked_batch"
+            }
+        }
+    ]
+    
+    with patch("chunk_pipeline.enrich_chunks_batch", return_value=mock_enrichments):
+        chunk_ids = chunk_pipeline.process_conversation_to_chunks(messages)
+        
+    assert len(chunk_ids) == 1
+    
+    conn = memory_engine.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sequence_number, tier, raw_text, caveman_text, start_ts, end_ts, metadata FROM chunks WHERE chunk_id = ?", (chunk_ids[0],))
+        row = cursor.fetchone()
+        assert row is not None
+        seq, tier, raw, cave, start, end, meta_json = row
+        assert seq == 1
+        assert tier == "unclassified"
+        assert "User: I prefer Python. What do you think?" in raw
+        assert cave == "user prefer python. python excellent backend."
+        assert start == 1000
+        assert end == 1010
+        
+        meta = json.loads(meta_json)
+        assert meta["enrichment_type"] == "mocked_batch"
+    finally:
+        conn.close()
+
