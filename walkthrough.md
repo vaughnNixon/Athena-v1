@@ -202,7 +202,9 @@ We successfully wired the four isolated subsystems (Migration, Chunking, Lifecyc
 We implemented the adaptive memory learning engine to continuously improve retrieval quality based on explicit user corrections without altering raw conversation history:
 
 - **Correction Message Interception**: The agent loop detects correction triggers (e.g., `"wrong"`, `"incorrect"`, `"try again"`, `"not what I meant"`) via intent classification. When matching `"correction"`, it triggers the learning pipeline.
-- **Desperation Pipeline Integration**: Runs desperation retrieval on the previous user query, then queries the LLM to identify which specific desperation-matched chunk(s) contain the correct information.
+- **Two-Stage Chunk Selection (Adaptive Chunking)**:
+  - **Stage A (Deterministic Candidate Ranking)**: Computes word overlap between user correction search terms and candidate chunks. If one chunk score exceeds `learning_confidence_threshold` (default `0.8`) and clearly outperforms others (gap >= `0.2`), it is immediately accepted, completely bypassing LLM calls.
+  - **Stage B (LLM Arbitration)**: If the match is ambiguous or fails Stage A, falls back to routed LLM calls to select correct chunks.
 - **Skip Mark Tuning & Penalties**:
   - Decreases the `skip_score` of useful chunks, making them more likely to be retrieved next time.
   - Increases the `skip_score` of irrelevant matched chunks (chunks that caused the wrong answer) by `0.2`.
@@ -218,10 +220,10 @@ We implemented the adaptive memory learning engine to continuously improve retri
   - Added chat commands `/rollback` and `/learning` to display stats tables and reset learning data in the shell.
 
 ### Test Verification
-Added **4 comprehensive unit tests** in `tests/test_learning_engine.py` testing intent triggers, skip score tuning, database logging, statistics calculation, anti-gaming, and rollback resets.
+Added **5 comprehensive unit tests** in `tests/test_learning_engine.py` testing intent triggers, skip score tuning, deterministic Stage A candidate rank bypassing, database logging, statistics calculation, anti-gaming, and rollback resets.
 
-All **59 tests** are passing successfully:
+All **60 tests** are passing successfully:
 ```powershell
-============================= 59 passed in 7.26s ==============================
+============================= 60 passed in 5.61s ==============================
 ```
 

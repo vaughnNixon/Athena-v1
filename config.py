@@ -25,6 +25,7 @@ memory:
   embedding_top_k: 3
   desperation_enabled: true
   adaptive_learning_enabled: true
+  learning_confidence_threshold: 0.8
   compression:
     caveman_threshold_tokens: 1000
     headroom_max_injection_tokens: 500

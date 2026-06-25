@@ -117,6 +117,52 @@ def test_learning_pipeline_skip_marks_tuning():
     finally:
         conn.close()
 
+def test_deterministic_candidate_ranking_success():
+    # Insert chunks
+    conn = memory_engine.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Chunk 1: Matched incorrect chunk
+        cursor.execute("""
+            INSERT INTO chunks (sequence_number, tier, raw_text, caveman_text, start_ts, end_ts, char_count, token_estimate, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (1, "active", "We build Java backend software.", "build java backend", 1000, 1001, 30, 10, '{"projects": ["java"]}', 1000, 1000))
+        c1_id = cursor.lastrowid
+        
+        # Chunk 2: Target correct chunk containing unique term "Grace Dental"
+        cursor.execute("""
+            INSERT INTO chunks (sequence_number, tier, raw_text, caveman_text, start_ts, end_ts, char_count, token_estimate, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (2, "passive", "Dental clinic: Grace Dental, Kochi", "dental clinic grace dental", 1010, 1011, 35, 10, '{"projects": ["dental"]}', 1010, 1010))
+        c2_id = cursor.lastrowid
+        
+        cursor.executemany("INSERT INTO chunk_keywords (chunk_id, keyword) VALUES (?, ?)", [
+            (c1_id, "java"), (c1_id, "backend"),
+            (c2_id, "dental"), (c2_id, "grace"), (c2_id, "clinic")
+        ])
+        conn.commit()
+    finally:
+        conn.close()
+        
+    last_retrieval_info = {
+        "query": "tell me about the project",
+        "matched_chunk_ids": [c1_id],
+        "retrieval_stage": "active_search",
+        "timestamp": int(time.time())
+    }
+    
+    # Bypasses LLM call completely by resolving via Stage A!
+    res = learning_engine.learn_from_feedback(
+        user_query="tell me about the project",
+        user_correction="Wrong, I meant Grace Dental",
+        last_retrieval_info=last_retrieval_info,
+        prev_response_text="We did a Java backend project."
+    )
+    
+    assert res["success"] is True
+    assert res["useful_chunk_ids"] == [c2_id]
+    assert c1_id in res["penalized_chunk_ids"]
+
 def test_anti_gaming_mechanisms():
     # When ATHENA_TESTING is unset, it should block rate-limited or stale events
     with patch.dict(os.environ):

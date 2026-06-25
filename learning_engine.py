@@ -124,57 +124,82 @@ def learn_from_feedback(
             "penalized_chunk_ids": []
         }
         
-    # 3. LLM selection of useful chunks (Stage 3)
+    # 3. Chunk Selection (Stage 3)
+    # Stage A: Deterministic Candidate Ranking
     useful_ids = []
-    chunks_list_str = "\n".join([f"ID {c['chunk_id']}: {c['raw_text']}" for c in desp_chunks])
+    correction_words = retrieval.get_word_set(user_correction)
+    stop_words = {"a", "an", "the", "and", "or", "but", "if", "then", "else", "i", "you", "he", "she", "it", "we", "they", "my", "your", "his", "her", "its", "our", "their", "me", "him", "them", "us", "wrong", "no", "incorrect", "meant", "correction", "try", "again", "that", "this", "these", "those", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "to", "for", "of", "in", "on", "at", "by", "with", "about", "as"}
+    search_terms = correction_words - stop_words
     
-    llm_prompt = (
-        "You are the adaptive learning engine for Athena v1.1.\n"
-        f"The user query was: '{user_query}'\n"
-        "Athena answered incorrectly.\n"
-        f"The user correction is: '{user_correction}'\n"
-        "Below are candidate chunks retrieved from desperation memory. Identify which chunk(s) contain the correct information to resolve the user correction.\n\n"
-        f"Chunks:\n{chunks_list_str}\n\n"
-        "Instructions:\n"
-        "- Return the output as a valid raw JSON object with a single key 'useful_chunk_ids' containing a list of integer chunk IDs.\n"
-        "- If none of the chunks are relevant, return: {\"useful_chunk_ids\": []}\n"
-        "- Example: {\"useful_chunk_ids\": [3, 5]}"
-    )
+    threshold = float(mem_cfg.get("learning_confidence_threshold", 0.8))
     
-    skip_providers = []
-    skip_keys = {}
-    while True:
-        try:
-            client, model, provider = providers.get_routing_client(
-                skip_providers=skip_providers,
-                skip_keys=skip_keys
-            )
-        except Exception as exc:
-            logger.warning("No healthy LLM provider for learning engine: %s. Using fallback.", exc)
-            break
+    scored_candidates = []
+    if search_terms:
+        for chunk in desp_chunks:
+            chunk_text = f"{chunk.get('raw_text', '')} {chunk.get('caveman_text', '')}".lower()
+            chunk_words = retrieval.get_word_set(chunk_text)
+            overlap = search_terms.intersection(chunk_words)
+            score = len(overlap) / len(search_terms) if len(search_terms) > 0 else 0.0
+            scored_candidates.append((chunk["chunk_id"], score))
             
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a JSON-only query resolution assistant."},
-                    {"role": "user", "content": llm_prompt}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.0
-            )
-            content = response.choices[0].message.content
-            providers.record_success(provider)
-            data = json.loads(content)
-            useful_ids = [int(cid) for cid in data.get("useful_chunk_ids", [])]
-            break
-        except Exception as exc:
-            logger.warning("LLM learning call failed on provider %s: %s. Retrying...", provider, exc)
-            active_key = getattr(client, "key", None)
-            if active_key:
-                skip_keys.setdefault(provider, []).append(active_key)
-            else:
-                skip_providers.append(provider)
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        # If one chunk clearly exceeds threshold and has a clear gap (>= 0.2), accept immediately
+        if scored_candidates and scored_candidates[0][1] >= threshold:
+            if len(scored_candidates) == 1 or (scored_candidates[0][1] - scored_candidates[1][1] >= 0.2):
+                useful_ids = [scored_candidates[0][0]]
+                logger.info("Deterministic Stage A matched Chunk ID %d with score %.2f. Bypassing LLM call.", useful_ids[0], scored_candidates[0][1])
+
+    # Stage B: LLM Arbitration (if deterministic ranking is ambiguous or below threshold)
+    if not useful_ids:
+        chunks_list_str = "\n".join([f"ID {c['chunk_id']}: {c['raw_text']}" for c in desp_chunks])
+        llm_prompt = (
+            "You are the adaptive learning engine for Athena v1.1.\n"
+            f"The user query was: '{user_query}'\n"
+            "Athena answered incorrectly.\n"
+            f"The user correction is: '{user_correction}'\n"
+            "Below are candidate chunks retrieved from desperation memory. Identify which chunk(s) contain the correct information to resolve the user correction.\n\n"
+            f"Chunks:\n{chunks_list_str}\n\n"
+            "Instructions:\n"
+            "- Return the output as a valid raw JSON object with a single key 'useful_chunk_ids' containing a list of integer chunk IDs.\n"
+            "- If none of the chunks are relevant, return: {\"useful_chunk_ids\": []}\n"
+            "- Example: {\"useful_chunk_ids\": [3, 5]}"
+        )
+        
+        skip_providers = []
+        skip_keys = {}
+        while True:
+            try:
+                client, model, provider = providers.get_routing_client(
+                    skip_providers=skip_providers,
+                    skip_keys=skip_keys
+                )
+            except Exception as exc:
+                logger.warning("No healthy LLM provider for learning engine: %s. Using fallback.", exc)
+                break
+                
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a JSON-only query resolution assistant."},
+                        {"role": "user", "content": llm_prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0
+                )
+                content = response.choices[0].message.content
+                providers.record_success(provider)
+                data = json.loads(content)
+                useful_ids = [int(cid) for cid in data.get("useful_chunk_ids", [])]
+                break
+            except Exception as exc:
+                logger.warning("LLM learning call failed on provider %s: %s. Retrying...", provider, exc)
+                active_key = getattr(client, "key", None)
+                if active_key:
+                    skip_keys.setdefault(provider, []).append(active_key)
+                else:
+                    skip_providers.append(provider)
                 
     # 4. Skip Mark Updates (Stage 3)
     # Useful chunks: decrease skip_score
