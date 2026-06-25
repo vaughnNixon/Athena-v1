@@ -88,3 +88,22 @@ Athena v1 - System Diagnostic Audit
 ```
 
 All parts are correctly aligned and prepared for operation.
+
+---
+
+## 5. Athena v1.1 — Chunk Memory Architecture & Migration
+
+We have successfully implemented and verified the next-generation memory architecture for Athena v1.1.
+
+### Key Architecture Components
+- **Deterministic Chronological Ordering (`sequence_number`)**: Added a monotonically increasing `sequence_number` column and index `idx_chunks_sequence` to `chunks` table, guaranteeing deterministic chronological scans (`ORDER BY sequence_number ASC`) independent of surrogate SQLite primary keys.
+- **Normalized Keyword Indexes (`chunk_keywords` Table)**: Normalized the keywords list to a separate database table with unique constraints and `idx_chunk_keywords_val` index to scale lookup speed to millions of entries (`O(log K)` indexed search) instead of slow JSON scanning.
+- **`insert_chunk()` API**: Added a transaction-safe API for future chunk creation. It queries the maximum current sequence number inside the write transaction and appends the next chunk at `max(sequence_number) + 1` while preventing sequence number updates.
+- **Transaction-Wrapped & Idempotent Migration**: Implemented `migrate_legacy_facts()` to safely backfill legacy facts into the new chunk system under the `"unclassified"` tier. It orders facts by `created_at ASC, id ASC` to assign chronological sequence numbers, updating `schema_metadata` versions on successful completion.
+
+### Test Verification
+The test suite has been updated to **37 tests** which cover table/index creation, idempotent & resumable migration, mid-transaction failure rollbacks, and sequential order appending for `insert_chunk`.
+
+```powershell
+============================= 37 passed in 4.31s ==============================
+```

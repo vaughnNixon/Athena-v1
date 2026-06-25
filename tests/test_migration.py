@@ -39,7 +39,7 @@ def test_db_initialization_creates_new_tables():
             assert cursor.fetchone() is not None, f"Table {table} does not exist"
             
         # Verify indexes exist
-        indexes = ["idx_chunks_tier", "idx_chunks_timestamps", "idx_chunks_migrated_from", "idx_chunk_keywords_val"]
+        indexes = ["idx_chunks_tier", "idx_chunks_sequence", "idx_chunks_timestamps", "idx_chunks_migrated_from", "idx_chunk_keywords_val"]
         for idx in indexes:
             cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (idx,))
             assert cursor.fetchone() is not None, f"Index {idx} does not exist"
@@ -84,18 +84,23 @@ def test_migration_is_idempotent_and_resumable():
     conn = memory_engine.get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT chunk_id, tier, raw_text, caveman_text, start_ts, end_ts, migrated_from_fact_id, metadata FROM chunks ORDER BY chunk_id ASC")
+        cursor.execute("SELECT chunk_id, sequence_number, tier, raw_text, caveman_text, start_ts, end_ts, migrated_from_fact_id, metadata FROM chunks ORDER BY sequence_number ASC")
         chunks = cursor.fetchall()
         assert len(chunks) == 3
         
         # Verify first chunk details
-        c_id, tier, raw, cave, start, end, mig_id, meta_json = chunks[0]
+        c_id, seq1, tier, raw, cave, start, end, mig_id, meta_json = chunks[0]
+        assert seq1 == 1 # First migrated fact is sequence_number 1
         assert tier == "unclassified" # Default tier for migrated facts
         assert raw == "Lucky is a Doberman dog."
         assert "LUCKY" in cave and "DOBERMAN" in cave
         assert start == 1000
         assert end == 1001
         assert mig_id is not None
+        
+        # Verify sequence numbers of subsequent chunks
+        assert chunks[1][1] == 2
+        assert chunks[2][1] == 3
         
         meta = json.loads(meta_json)
         assert meta["legacy_category"] == "dogs"
@@ -141,6 +146,43 @@ def test_migration_is_idempotent_and_resumable():
     assert res2["migrated_facts"] == 4
     assert res2["remaining_facts"] == 0
     assert res2["percentage_complete"] == 100.0
+
+    # 6. Verify sequence number 4 and future chunk insertion behavior
+    conn = memory_engine.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sequence_number, raw_text FROM chunks WHERE sequence_number = 4")
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[1] == "Athena remembers everything."
+    finally:
+        conn.close()
+
+    # Test future chunk creation with insert_chunk
+    chunk_id = memory_engine.insert_chunk(
+        tier="active",
+        raw_text="The quick brown fox jumps over the lazy dog.",
+        start_ts=1040,
+        end_ts=1041,
+        keywords=["fox", "dog"]
+    )
+    assert chunk_id is not None
+
+    conn = memory_engine.get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sequence_number, tier, raw_text FROM chunks WHERE chunk_id = ?", (chunk_id,))
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 5 # Appends the next available sequence number
+        assert row[1] == "active"
+        assert row[2] == "The quick brown fox jumps over the lazy dog."
+
+        cursor.execute("SELECT keyword FROM chunk_keywords WHERE chunk_id = ? ORDER BY keyword ASC", (chunk_id,))
+        kws = [r[0] for r in cursor.fetchall()]
+        assert kws == ["dog", "fox"]
+    finally:
+        conn.close()
 
 def test_migration_rollback_on_failure():
     # 1. Insert a legacy fact

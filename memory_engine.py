@@ -53,6 +53,7 @@ def initialize_db():
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS chunks (
                     chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sequence_number INTEGER NOT NULL,
                     tier TEXT NOT NULL CHECK(tier IN ('active', 'passive', 'mixed', 'unclassified')),
                     raw_text TEXT NOT NULL,
                     caveman_text TEXT NOT NULL,
@@ -119,6 +120,7 @@ def initialize_db():
             
             # Indexes for chunks
             conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_tier ON chunks(tier)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_sequence ON chunks(sequence_number)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_timestamps ON chunks(start_ts, end_ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_migrated_from ON chunks(migrated_from_fact_id)")
             
@@ -338,14 +340,18 @@ def migrate_legacy_facts() -> dict:
     if progress["remaining_facts"] == 0:
         return progress
         
-    # 2. Query facts that have NOT been migrated yet
+    # Get current max sequence_number in chunks (defaulting to 0)
+    cursor.execute("SELECT IFNULL(MAX(sequence_number), 0) FROM chunks")
+    current_seq = cursor.fetchone()[0]
+        
+    # 2. Query facts that have NOT been migrated yet, ordered chronologically (created_at ASC, id ASC)
     cursor.execute("""
         SELECT id, fact, category, importance, confidence, decay_rate, mention_count, scope_ids, archived, created_at, updated_at
         FROM facts f
         WHERE NOT EXISTS (
             SELECT 1 FROM chunks c WHERE c.migrated_from_fact_id = f.id
         )
-        ORDER BY id ASC
+        ORDER BY created_at ASC, id ASC
     """)
     facts_to_migrate = cursor.fetchall()
     
@@ -361,6 +367,9 @@ def migrate_legacy_facts() -> dict:
                  
                 # tier defaults to 'unclassified' for all migrated legacy facts
                 tier = "unclassified"
+                
+                # Increment sequence number
+                current_seq += 1
                 
                 # Deterministic caveman conversion fallback
                 words = fact_text.split()
@@ -410,11 +419,11 @@ def migrate_legacy_facts() -> dict:
                 # 1. Insert core chunk
                 cursor.execute("""
                     INSERT INTO chunks (
-                        tier, raw_text, caveman_text, start_ts, end_ts, 
+                        sequence_number, tier, raw_text, caveman_text, start_ts, end_ts, 
                         char_count, token_estimate, metadata, created_at, updated_at, migrated_from_fact_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    tier, fact_text, caveman_text, created_at, updated_at,
+                    current_seq, tier, fact_text, caveman_text, created_at, updated_at,
                     char_count, token_estimate, json.dumps(metadata_dict), created_at, updated_at, fact_id
                 ))
                 chunk_id = cursor.lastrowid
@@ -455,3 +464,81 @@ def migrate_legacy_facts() -> dict:
         conn.close()
         
     return get_migration_progress()
+
+def insert_chunk(
+    tier: str,
+    raw_text: str,
+    start_ts: int,
+    end_ts: int,
+    metadata_dict: dict = None,
+    caveman_text: str = None,
+    migrated_from_fact_id: int = None,
+    keywords: list = None
+) -> int:
+    """
+    Inserts a new chunk into the database, assigning the next available sequence number.
+    Ensures that once assigned, the sequence number is never modified.
+    """
+    initialize_db()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if tier not in ('active', 'passive', 'mixed', 'unclassified'):
+        raise ValueError(f"Invalid tier: {tier}")
+        
+    try:
+        with conn:
+            # Get next sequence number inside the transaction
+            cursor.execute("SELECT IFNULL(MAX(sequence_number), 0) FROM chunks")
+            next_seq = cursor.fetchone()[0] + 1
+            
+            # Compute caveman text if not provided
+            if not caveman_text:
+                words = raw_text.split()
+                fillers = {"the", "a", "an", "is", "are", "was", "were", "to", "of", "and", "in", "on", "at", "for"}
+                caveman_words = [w.upper() for w in words if w.lower() not in fillers]
+                caveman_text = " ".join(caveman_words) if caveman_words else raw_text.upper()
+                
+            # Process metadata
+            meta = metadata_dict or {}
+            # Ensure future-proof metadata keys exist if dict provided
+            for key in ["workspace", "project", "skill", "annotation"]:
+                if key not in meta:
+                    meta[key] = None
+                    
+            char_count = len(raw_text)
+            token_estimate = char_count // 4
+            now_ts = int(time.time())
+            
+            cursor.execute("""
+                INSERT INTO chunks (
+                    sequence_number, tier, raw_text, caveman_text, start_ts, end_ts,
+                    char_count, token_estimate, metadata, created_at, updated_at, migrated_from_fact_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                next_seq, tier, raw_text, caveman_text, start_ts, end_ts,
+                char_count, token_estimate, json.dumps(meta), now_ts, now_ts, migrated_from_fact_id
+            ))
+            chunk_id = cursor.lastrowid
+            
+            # Determine keywords if not provided
+            if keywords is None:
+                # Extract keywords (words > 2 chars, lowercase, stripped of non-alphanumeric chars)
+                words_cleaned = re.findall(r"\w+", raw_text.lower())
+                keywords_set = set(w for w in words_cleaned if len(w) > 2)
+            else:
+                keywords_set = set(k.strip().lower() for k in keywords if k.strip())
+                
+            for kw in sorted(list(keywords_set)):
+                cursor.execute("""
+                    INSERT OR IGNORE INTO chunk_keywords (chunk_id, keyword)
+                    VALUES (?, ?)
+                """, (chunk_id, kw))
+                
+            return chunk_id
+    except Exception as exc:
+        logger.error("Failed to insert chunk: %s", exc)
+        raise exc
+    finally:
+        conn.close()
+
