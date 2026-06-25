@@ -107,3 +107,29 @@ The test suite has been updated to **37 tests** which cover table/index creation
 ```powershell
 ============================= 37 passed in 4.31s ==============================
 ```
+
+---
+
+## 6. Athena v1.1 — Prompt 2: Intelligent Chunk Generation Pipeline
+
+We have implemented the full Intelligent Chunk Generation Pipeline (`chunk_pipeline.py`) that transforms completed conversations into high-quality database memory chunks.
+
+### Pipeline Features & Rules
+- **Sentence Detection (`detect_sentences`)**: A deterministic parsing routine that segments raw conversation text while protecting URLs (`http`, `https`), decimal values (e.g. `3.14`), version numbers (e.g. `v1.1`), and common abbreviations (e.g. `e.g.`, `i.e.`, `vs.`, `etc.`, `mr.`) from incorrect splitting.
+- **Chronological Builder (`build_chronological_chunks`)**: Organizes sentence units chronologically into chunks up to ~16,000 characters. If a single sentence exceeds this limit, it splits on punctuation priority (`;` then `-` then `,`).
+- **Tiny Chunk Merging**: Automatically merges fragments under 100 characters into their chronological neighbors, avoiding fragmented databases.
+- **LLM Enrichment with Provider rotation**: Queries active providers to generate:
+  - **Telegraphic Caveman Summaries**: Compressed, keyword-rich representations of raw chunks.
+  - **Keywords**: 5-10 indexed terms written to `chunk_keywords`.
+  - **Metadata Annotations**: Theme and entity lists nested inside metadata JSON fields.
+  - *Full Failover*: Automatically retries other healthy providers if an error occurs.
+- **Zero-Dependency Fallback (`fallback_enrich_chunk`)**: If all API keys are down or network is offline, Athena uses deterministic stop-word filters and word frequency extraction to generate caveman summaries and keywords, guaranteeing that memory creation never fails.
+
+### Test Verification
+Added **8 new unit tests** in [tests/test_chunk_pipeline.py](file:///C:/Users/nixon/Documents/antigravity/wise-maxwell/tests/test_chunk_pipeline.py) covering sentence detection limits, punctuation sentence splitting, tiny chunk merging, LLM JSON extraction, automatic provider failover, and database storage.
+
+All **45 tests** are passing successfully:
+```powershell
+============================= 45 passed in 4.96s ==============================
+```
+
