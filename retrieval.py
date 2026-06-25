@@ -164,39 +164,3 @@ def retrieve_relevant_memories(query: str, scope_ids: list, limit: int = 5) -> s
         formatted_block = "\n".join(lines)
         
     return formatted_block
-
-PHATIC_PHRASES = {
-    "hello", "hi", "hey", "greetings", "yo", "sup", "howdy", "athena",
-    "hola", "bonjour", "namaste", "good morning", "good afternoon",
-    "good evening", "goodnight", "good night", "bye", "goodbye", "exit", "quit",
-    "hello athena", "hi athena", "hey athena", "yo athena",
-    "how are you", "how are you doing", "how's it going", "hows it going",
-    "what's up", "whats up", "what is up", "what's going on", "whats going on",
-    "is anyone there", "are you there", "are you alive", "u alive", "hello u alive", "hello athena u alive",
-    "test", "testing"
-}
-
-STOP_WORDS = {
-    "is", "are", "you", "there", "it", "a", "the", "to", "how", "what", "do",
-    "hello", "hi", "hey", "athena", "alive", "u", "greetings", "yo", "sup",
-    "howdy", "hola", "bonjour", "namaste", "good", "morning", "afternoon",
-    "evening", "night", "goodnight", "goodbye", "bye", "exit", "quit",
-    "test", "testing", "doing", "going", "on", "up", "who", "anyone",
-    "here", "someone", "am", "i", "was", "were", "be", "been", "have", "has",
-    "had", "will", "would", "shall", "should", "can", "could", "may", "might"
-}
-
-def is_phatic_query(query: str) -> bool:
-    cleaned = query.lower().strip().rstrip("?.!,")
-    if cleaned in PHATIC_PHRASES:
-        return True
-    words = [w.strip("?.!,:;") for w in cleaned.split() if w]
-    words = [w for w in words if w]
-    if not words:
-        return True
-    if all(w in STOP_WORDS for w in words):
-        return True
-    return False
-
-
-
