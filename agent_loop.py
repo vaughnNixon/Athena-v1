@@ -57,7 +57,11 @@ class AthenaAgent:
                 "Defining trait: 'Athena remembers what others forget.'\n"
                 "You have access to a retrieve_memories tool for searching long-term memory.\n"
                 "Use this tool when you need context about past interactions or project details.\n"
-                "Communicate only in terse, telegraphic, sparse prose (Caveman style)."
+                "Communicate only in terse, telegraphic, sparse prose (Caveman style).\n\n"
+                "Style Toggle Instruction:\n"
+                "Previous conversation may contain natural responses. Ignore previous writing style. "
+                "Continue using the same facts, reasoning, and context, but from this point onward "
+                "respond exclusively in sparse Caveman style."
             )
         else:
             base_system = (
@@ -65,7 +69,10 @@ class AthenaAgent:
                 "Your defining trait is: 'Athena remembers what others forget.'\n"
                 "You have access to a retrieve_memories tool that searches your long-term memory.\n"
                 "Call retrieve_memories when you need context about past interactions, user preferences, or project details.\n"
-                "Use memory to seamlessly personalize responses and remember details the user has shared."
+                "Use memory to seamlessly personalize responses and remember details the user has shared.\n\n"
+                "Style Toggle Instruction:\n"
+                "Previous conversation may contain Caveman responses. Treat them as factual summaries only. "
+                "Continue the same conversation naturally from this point onward."
             )
         
         if system_message:
@@ -74,63 +81,12 @@ class AthenaAgent:
         system_prompt = base_system
         
         # 2. Add user message to local history
-        user_entry = {"role": "user", "content": user_message}
-        if self.caveman_mode:
-            user_entry["caveman"] = True
-        self.history.append(user_entry)
+        self.history.append({"role": "user", "content": user_message})
         
         # 3. Apply compression discipline
         self.history = athena_compression.run_caveman_summarization(self.history, self.project_id)
         compressed_history = athena_compression.compress_history_via_headroom(self.history)
         
-        # Style isolation: filter history based on the active caveman mode
-        if self.caveman_mode:
-            # When caveman mode is ON, filter out all normal turns to avoid natural-style biasing
-            filtered_history = []
-            for msg in compressed_history:
-                # Keep system messages, tool/assistant turns tagged with caveman, and user messages tagged with caveman
-                if msg.get("caveman") == True or msg.get("role") == "system":
-                    filtered_history.append(msg)
-            compressed_history = filtered_history
-        else:
-            # When caveman mode is OFF, filter out all caveman turns to avoid style mimicking
-            filtered_history = []
-            i = 0
-            while i < len(compressed_history):
-                # 1. Skip messages tagged explicitly as caveman
-                if compressed_history[i].get("caveman") == True:
-                    i += 1
-                    continue
-                
-                # 2. Skip user/assistant pairs where assistant message is caveman-style
-                if (i < len(compressed_history) - 1 and 
-                    compressed_history[i]["role"] == "user" and 
-                    compressed_history[i+1]["role"] == "assistant"):
-                    
-                    ast_content = compressed_history[i+1].get("content") or ""
-                    ast_content_stripped = ast_content.strip().lower()
-                    
-                    is_ack_style = (
-                        ast_content_stripped == "ack." or 
-                        ast_content_stripped == "ack" or 
-                        ast_content_stripped.startswith("ack. ") or 
-                        ast_content_stripped.startswith("ack ")
-                    )
-                    
-                    if is_ack_style or compressed_history[i+1].get("caveman") == True:
-                        i += 2
-                        continue
-                
-                # 3. Skip standalone assistant ACK messages
-                if (compressed_history[i]["role"] == "assistant" and 
-                    (compressed_history[i].get("content") or "").strip().lower() in ("ack.", "ack")):
-                    i += 1
-                    continue
-                    
-                filtered_history.append(compressed_history[i])
-                i += 1
-            compressed_history = filtered_history
-            
         # 4. Assemble message payload
         messages = [
             {"role": "system", "content": system_prompt}
@@ -185,8 +141,6 @@ class AthenaAgent:
         
         # 8. Save to history and trigger distillation
         history_entry = {"role": "assistant", "content": assistant_content}
-        if self.caveman_mode:
-            history_entry["caveman"] = True
         if response.get("codex_reasoning_items"):
             history_entry["codex_reasoning_items"] = response["codex_reasoning_items"]
         if response.get("codex_message_items"):
