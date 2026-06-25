@@ -455,6 +455,47 @@ def run_chat_loop(project_id: str, session_id: str):
                         mgr.save_providers()
                         console.print(f"[bold green]Model override set to '{model_id}'.[/bold green]")
                     continue
+                    
+            if cmd_lower == "/rollback":
+                import learning_engine
+                learning_engine.reset_skip_marks()
+                learning_engine.reset_query_statistics()
+                console.print("[bold green]Successfully reset all retrieval skip marks and query category statistics.[/bold green]")
+                continue
+                
+            if cmd_lower == "/learning":
+                from rich.table import Table
+                import learning_engine
+                
+                conn = memory_engine.get_db_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT query_type, total_queries, corrected_queries, accuracy FROM query_statistics")
+                    rows = cursor.fetchall()
+                    if not rows:
+                        console.print("[dim]No query statistics logged yet.[/dim]")
+                    else:
+                        table = Table(title="Athena Adaptive Retrieval Statistics", title_style="bold cyan")
+                        table.add_column("Query Type", style="yellow")
+                        table.add_column("Total Queries", justify="right", style="white")
+                        table.add_column("Corrected Queries", justify="right", style="white")
+                        table.add_column("Accuracy", justify="right")
+                        
+                        for row in rows:
+                            qtype, total, corrected, acc = row
+                            acc_color = "green" if acc >= 0.8 else "yellow" if acc >= 0.5 else "red"
+                            table.add_row(qtype, str(total), str(corrected), f"[bold {acc_color}]{acc * 100:.1f}%[/bold {acc_color}]")
+                        console.print(table)
+                        
+                    cursor.execute("SELECT COUNT(*) FROM skip_marks")
+                    skip_count = cursor.fetchone()[0]
+                    console.print(f"[dim]Total active retrieval skip marks (penalized chunks): [bold white]{skip_count}[/bold white][/dim]")
+                    
+                except Exception as exc:
+                    console.print(f"[red]Failed to fetch statistics: {exc}[/red]")
+                finally:
+                    conn.close()
+                continue
             
             # Process turn
             console.print("[dim]Athena is thinking...[/dim]", end="\r")
@@ -488,11 +529,14 @@ def show_logs(lines: int = 40):
 
 def main():
     parser = argparse.ArgumentParser(description="Athena v1: The Memory-First AI Agent.")
-    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep"], help="Command to run")
+    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep", "rollback"], help="Command to run")
     parser.add_argument("--project", default="default", help="Project namespace scope (default: default)")
     parser.add_argument("--session", default="session_1", help="Session ID (default: session_1)")
     parser.add_argument("--lines", type=int, default=40, help="Number of log lines to show (default: 40)")
     parser.add_argument("--provider", help="Active model provider to use (switches default in config)")
+    parser.add_argument("--skip", action="store_true", help="Reset skip marks (learning engine)")
+    parser.add_argument("--stats", action="store_true", help="Reset query statistics (learning engine)")
+    parser.add_argument("--all", action="store_true", help="Reset all learning statistics and skip marks")
     
     # If no arguments provided, default to show help
     if len(sys.argv) == 1:
@@ -544,6 +588,14 @@ def main():
             console.print("[bold green][OK] Memory sweep completed successfully.[/bold green]")
         except Exception as exc:
             console.print(f"[bold red][FAIL] Memory sweep failed: {exc}[/bold red]")
+    elif args.command == "rollback":
+        import learning_engine
+        if args.skip or args.all or (not args.stats and not args.skip):
+            learning_engine.reset_skip_marks()
+            console.print("[bold green][OK] Skip marks reset completed.[/bold green]")
+        if args.stats or args.all or (not args.stats and not args.skip):
+            learning_engine.reset_query_statistics()
+            console.print("[bold green][OK] Query statistics reset completed.[/bold green]")
     elif args.command == "chat":
         run_chat_loop(args.project, args.session)
 

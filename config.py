@@ -24,6 +24,7 @@ memory:
   embedding_provider: "gemini"
   embedding_top_k: 3
   desperation_enabled: true
+  adaptive_learning_enabled: true
   compression:
     caveman_threshold_tokens: 1000
     headroom_max_injection_tokens: 500

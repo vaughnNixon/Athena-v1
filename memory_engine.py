@@ -100,9 +100,40 @@ def initialize_db():
                     chunks_used_in_answer TEXT NOT NULL,
                     chunks_used_in_desperation TEXT NOT NULL,
                     was_helpful INTEGER CHECK(was_helpful IN (0, 1)),
+                    retrieval_stage TEXT,
+                    matched_chunk_ids TEXT,
+                    desperation_chunk_ids TEXT,
+                    explanation TEXT,
                     timestamp INTEGER NOT NULL
                 )
             """)
+            
+            # Check and alter feedback_log if missing new columns (backward compatibility)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(feedback_log)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if columns:
+                new_cols = {
+                    "retrieval_stage": "TEXT",
+                    "matched_chunk_ids": "TEXT",
+                    "desperation_chunk_ids": "TEXT",
+                    "explanation": "TEXT"
+                }
+                for col_name, col_type in new_cols.items():
+                    if col_name not in columns:
+                        conn.execute(f"ALTER TABLE feedback_log ADD COLUMN {col_name} {col_type}")
+
+            # Create query statistics table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS query_statistics (
+                    query_type TEXT PRIMARY KEY,
+                    total_queries INTEGER DEFAULT 0,
+                    corrected_queries INTEGER DEFAULT 0,
+                    accuracy REAL DEFAULT 1.0,
+                    last_updated_ts INTEGER NOT NULL
+                )
+            """)
+
             # Create schema metadata table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_metadata (

@@ -2,12 +2,14 @@ import os
 import json
 import logging
 from pathlib import Path
+import time
 import config
 import providers
 import retrieval
 import distillation
 import chunk_pipeline
 import athena_compression
+import learning_engine
 
 logger = logging.getLogger("athena.agent_loop")
 
@@ -21,6 +23,12 @@ class AthenaAgent:
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
         self.history = self._load_history()
         self.caveman_mode = False
+        self.last_retrieval_info = {
+            "query": "",
+            "matched_chunk_ids": [],
+            "retrieval_stage": "none",
+            "timestamp": 0
+        }
         
     def _load_history(self) -> list:
         if self.history_file.exists():
@@ -51,6 +59,76 @@ class AthenaAgent:
         3. If LLM doesn't call tool:
            a. Return response immediately (no extra latency)
         """
+        # Intercept correction messages for adaptive learning
+        intent = retrieval.classify_query_intent(user_message)
+        if intent == "correction" and self.history:
+            prev_user_msg = None
+            prev_assistant_content = None
+            for item in reversed(self.history):
+                if item.get("role") == "user" and prev_user_msg is None:
+                    prev_user_msg = item.get("content", "")
+                elif item.get("role") == "assistant" and prev_assistant_content is None:
+                    prev_assistant_content = item.get("content", "")
+            
+            if prev_user_msg and prev_assistant_content:
+                last_info = getattr(self, "last_retrieval_info", None)
+                if not last_info:
+                    last_info = {
+                        "query": prev_user_msg,
+                        "matched_chunk_ids": [],
+                        "retrieval_stage": "none",
+                        "timestamp": int(time.time()) - 10
+                    }
+                
+                learn_res = learning_engine.learn_from_feedback(
+                    user_query=prev_user_msg,
+                    user_correction=user_message,
+                    last_retrieval_info=last_info,
+                    prev_response_text=prev_assistant_content
+                )
+                
+                explanation = learn_res.get("explanation", "No explanation provided.")
+                logger.info("Adaptive learning executed: %s", explanation)
+                
+                # Re-run staged retrieval with corrected skip scores
+                staged_result = retrieval.retrieve_memories_staged(
+                    query=prev_user_msg,
+                    scope_ids=[self.project_id]
+                )
+                
+                self.last_retrieval_info = {
+                    "query": prev_user_msg,
+                    "matched_chunk_ids": staged_result.get("matched_chunk_ids", []),
+                    "retrieval_stage": staged_result.get("retrieval_stage", "none"),
+                    "timestamp": int(time.time())
+                }
+                
+                memories_block = _format_staged_result(staged_result)
+                
+                correction_prompt = (
+                    f"The user pointed out an error in the previous answer: '{user_message}'\n"
+                    f"The previous query was: '{prev_user_msg}'\n"
+                    f"The previous incorrect answer was: '{prev_assistant_content}'\n"
+                    f"Here are the corrected long-term memories retrieved:\n{memories_block}\n\n"
+                    "Provide a corrected response to the previous query, addressing the user's correction explicitly, "
+                    "using only the new correct memory facts. Prefix your response with: "
+                    "[Athena has adjusted memory retrieval based on feedback]\n"
+                )
+                
+                messages = [
+                    {"role": "system", "content": "You are Athena v1, a helpful dialogue agent with adaptive learning memory."},
+                    {"role": "user", "content": correction_prompt}
+                ]
+                response = self._call_llm_with_tools(messages=messages)
+                corrected_answer = response.get("content", "ACK.")
+                
+                # Save turn to history and exit
+                self.history.append({"role": "user", "content": user_message})
+                self.history.append({"role": "assistant", "content": corrected_answer})
+                self._save_history()
+                
+                return corrected_answer
+
         # 1. Build system prompt
         if self.caveman_mode:
             base_system = (
@@ -111,6 +189,16 @@ class AthenaAgent:
                         query=query,
                         scope_ids=[self.project_id]
                     )
+                    
+                    # Update stats and retrieval metadata
+                    learning_engine.increment_query_count(retrieval.classify_query_intent(query))
+                    self.last_retrieval_info = {
+                        "query": query,
+                        "matched_chunk_ids": staged_result.get("matched_chunk_ids", []),
+                        "retrieval_stage": staged_result.get("retrieval_stage", "none"),
+                        "timestamp": int(time.time())
+                    }
+                    
                     # Format staged chunks into text block for LLM context
                     memories_block = _format_staged_result(staged_result)
                     
@@ -234,6 +322,16 @@ class AthenaAgent:
                             query=user_msg,
                             scope_ids=[self.project_id]
                         )
+                        
+                        # Update stats and retrieval metadata
+                        learning_engine.increment_query_count(retrieval.classify_query_intent(user_msg))
+                        self.last_retrieval_info = {
+                            "query": user_msg,
+                            "matched_chunk_ids": staged_result.get("matched_chunk_ids", []),
+                            "retrieval_stage": staged_result.get("retrieval_stage", "none"),
+                            "timestamp": int(time.time())
+                        }
+                        
                         memories_block = _format_staged_result(staged_result)
                         fallback_messages = list(cleaned_messages)
                         if memories_block:

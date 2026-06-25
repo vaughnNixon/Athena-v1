@@ -182,3 +182,46 @@ All **55 tests** are passing successfully:
 ```powershell
 ============================= 55 passed in 8.65s ==============================
 ```
+
+---
+
+## 9. Athena v1.1 — End-to-End Integration & System Wiring
+
+We successfully wired the four isolated subsystems (Migration, Chunking, Lifecycle Sweep, and Staged Retrieval) directly into the live production agent loop and CLI session runner:
+
+- **Staged Retrieval Integration**: Swapped the legacy, flat `retrieve_relevant_memories()` function in `agent_loop.py` with `retrieve_memories_staged()`. The agent now queries the new chunking and keyword indexes rather than the old flat facts table.
+- **Asynchronous Background Chunking**: Wired `chunk_pipeline.process_conversation_to_chunks()` to run inside a **background daemon thread** immediately after each conversation turn completes. This allows the LLM response to return instantly to the user without blocking for 5–10 seconds of chunk processing and embedding generation.
+- **Session Exit Sweep**: Configured `main.py` to run a final lifecycle sweep (`memory_sweep.run_memory_sweep()`) upon session exit (e.g. `/quit` or `/exit`), ensuring all newly ingested chunks are properly sorted and tiered before the next chat session.
+- **Race Condition & API Optimization**: Resolved the `chunk_embeddings` insert race condition by migrating to `INSERT OR IGNORE INTO`, and optimized embedding generation to skip non-embedding providers (like Groq, GitHub Copilot, NVIDIA) to prevent API call waste.
+- **Test Integrity**: Mocked the chunk pipeline inside `tests/test_agent_loop.py` to ensure local tests never trigger infinite LLM retries, and updated loop tests to populate hermetic memory chunks instead of old legacy facts. All 55 tests pass end-to-end.
+
+---
+
+## 10. Athena v1.1 — Prompt 5: Adaptive Memory Learning Engine
+
+We implemented the adaptive memory learning engine to continuously improve retrieval quality based on explicit user corrections without altering raw conversation history:
+
+- **Correction Message Interception**: The agent loop detects correction triggers (e.g., `"wrong"`, `"incorrect"`, `"try again"`, `"not what I meant"`) via intent classification. When matching `"correction"`, it triggers the learning pipeline.
+- **Desperation Pipeline Integration**: Runs desperation retrieval on the previous user query, then queries the LLM to identify which specific desperation-matched chunk(s) contain the correct information.
+- **Skip Mark Tuning & Penalties**:
+  - Decreases the `skip_score` of useful chunks, making them more likely to be retrieved next time.
+  - Increases the `skip_score` of irrelevant matched chunks (chunks that caused the wrong answer) by `0.2`.
+  - Integrates a `(1.0 - skip_score)` penalty factor in staged keyword and semantic retrieval.
+- **Statistics & Adaptive Thresholding**:
+  - Maintains accuracy statistics per query category (total queries, corrected queries, accuracy, last updated).
+  - Automatically lowers the retrieval threshold by `0.1` for any category with accuracy below `80%`, dynamically broadening memory search.
+- **Anti-Gaming and Explanations**:
+  - Enforces a 5-second rate limit, ignores identical duplicate corrections, and ignores stale corrections (>7 days).
+  - Appends detailed logs to `feedback_log` documenting chunk transitions, previous/new skip scores, and explicit learning explanations.
+- **CLI & Chat Rollback Commands**:
+  - Implemented `python main.py rollback [--skip] [--stats] [--all]` CLI command to reset skip marks and statistics.
+  - Added chat commands `/rollback` and `/learning` to display stats tables and reset learning data in the shell.
+
+### Test Verification
+Added **4 comprehensive unit tests** in `tests/test_learning_engine.py` testing intent triggers, skip score tuning, database logging, statistics calculation, anti-gaming, and rollback resets.
+
+All **59 tests** are passing successfully:
+```powershell
+============================= 59 passed in 7.26s ==============================
+```
+

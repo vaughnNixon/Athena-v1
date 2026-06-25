@@ -173,6 +173,12 @@ def classify_query_intent(query: str) -> str:
     q = query.lower()
     words = get_word_set(query)
     
+    # Check for correction indicators
+    correction_phrases = ["that's incorrect", "thats incorrect", "try again", "not what i meant", "you missed", "that is incorrect"]
+    correction_words = {"wrong", "no", "incorrect"}
+    if any(phrase in q for phrase in correction_phrases) or any(w in words for w in correction_words):
+        return "correction"
+        
     if any(w in words for w in ["prefer", "like", "dislike", "favorite", "love", "hate", "wish", "want"]):
         return "preferences"
     if any(w in words for w in ["project", "repo", "codebase", "repository", "software", "app", "application", "build"]):
@@ -279,6 +285,15 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
     conn = memory_engine.get_db_connection()
     cursor = conn.cursor()
     
+    # Adaptive threshold adjustment based on query statistics
+    try:
+        cursor.execute("SELECT accuracy FROM query_statistics WHERE query_type = ?", (intent,))
+        stats_row = cursor.fetchone()
+        if stats_row and stats_row[0] < 0.8:
+            threshold = max(0.2, threshold - 0.1)
+    except Exception as stats_exc:
+        logger.warning("Failed to query query_statistics for threshold adjustment: %s", stats_exc)
+
     def score_chunks(target_tiers: list) -> list:
         placeholders = ",".join("?" for _ in target_tiers)
         cursor.execute(f"""
@@ -288,6 +303,15 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
         """, target_tiers)
         rows = cursor.fetchall()
         
+        # Load skip marks for the current intent
+        skip_map = {}
+        try:
+            cursor.execute("SELECT chunk_id, skip_score FROM skip_marks WHERE query_type = ?", (intent,))
+            for cid, score in cursor.fetchall():
+                skip_map[cid] = float(score)
+        except Exception as skip_exc:
+            logger.warning("Failed to load skip marks: %s", skip_exc)
+            
         scored = []
         cursor.execute("SELECT IFNULL(MAX(sequence_number), 0) FROM chunks")
         max_seq = cursor.fetchone()[0]
@@ -329,13 +353,18 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                     
             composite_score = kw_overlap * 0.5 + meta_score * 0.2 + entity_score * 0.1 + recency_boost + intent_boost
             
+            # Apply learning skip marks penalty: composite_score * (1.0 - skip_score)
+            skip_score = skip_map.get(chunk_id, 0.0)
+            penalty_factor = max(0.0, 1.0 - skip_score)
+            final_score = composite_score * penalty_factor
+            
             scored.append({
                 "chunk_id": chunk_id,
                 "sequence_number": seq_num,
                 "tier": tier,
                 "raw_text": raw_text,
                 "caveman_text": caveman_text,
-                "score": min(1.0, composite_score)
+                "score": min(1.0, final_score)
             })
             
         scored.sort(key=lambda x: x["score"], reverse=True)
