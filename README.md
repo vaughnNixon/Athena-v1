@@ -21,10 +21,20 @@ graph TD
     ToolResponse --> FinalCall[6. Call LLM again with memory context]
     FinalCall --> Response
     
-    Response --> Save[7. Save assistant reply to history & trigger asynchronous Fact Distillation]
+    Response --> Save[7. Save assistant reply to history & trigger asynchronous Fact Distillation & Chunk Ingestion]
     Save --> DB[(SQLite Chunks & Keywords Store)]
     Save --> Out([Assistant Response])
 ```
+
+---
+
+## ── Running Tests ──
+
+To run the entire hermetic test suite (55 tests) inside the virtual environment:
+```powershell
+.venv\Scripts\python.exe -m pytest
+```
+
 
 ---
 

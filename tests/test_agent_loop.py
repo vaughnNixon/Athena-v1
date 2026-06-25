@@ -11,11 +11,41 @@ import config
 import memory_engine
 from agent_loop import AthenaAgent
 
+def insert_test_chunk(raw_text: str, caveman_text: str, keywords: list[str], tier: str = "active", project_id: str = "test_proj"):
+    import time
+    import json
+    conn = memory_engine.get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT IFNULL(MAX(sequence_number), 0) FROM chunks")
+            next_seq = cursor.fetchone()[0] + 1
+            now_ts = int(time.time())
+            cursor.execute("""
+                INSERT INTO chunks (
+                    sequence_number, tier, raw_text, caveman_text, start_ts, end_ts,
+                    char_count, token_estimate, metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                next_seq, tier, raw_text, caveman_text, now_ts, now_ts,
+                len(raw_text), len(raw_text) // 4, json.dumps({"projects": [project_id]}), now_ts, now_ts
+            ))
+            chunk_id = cursor.lastrowid
+            for kw in keywords:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO chunk_keywords (chunk_id, keyword)
+                    VALUES (?, ?)
+                """, (chunk_id, kw.strip().lower()))
+            return chunk_id
+    finally:
+        conn.close()
+
 @pytest.fixture(autouse=True)
 def setup_teardown():
     config.ensure_athena_dirs()
     memory_engine.initialize_db()
-    yield
+    with patch("chunk_pipeline.process_conversation_to_chunks") as mock_process:
+        yield mock_process
     # Cleanup
     db_path = memory_engine.get_db_path()
     if db_path.exists():
@@ -97,8 +127,14 @@ def test_run_one_turn_without_tool_call():
 def test_run_one_turn_with_tool_call():
     agent = AthenaAgent(project_id="test_proj", session_id="test_sess_toolcall")
     
-    # Store a fact
-    memory_engine.insert_or_reinforce_fact("Dental clinic: Grace Dental, Kochi", category="projects", importance=8, confidence=1.0, scope_ids=["test_proj"])
+    # Store a chunk
+    insert_test_chunk(
+        raw_text="Dental clinic: Grace Dental, Kochi",
+        caveman_text="dental clinic grace dental kochi",
+        keywords=["dental", "clinic", "grace", "kochi"],
+        tier="active",
+        project_id="test_proj"
+    )
     
     mock_client = MagicMock()
     
@@ -164,7 +200,13 @@ def test_tool_unsupported_fallback():
     agent = AthenaAgent(project_id="test_proj", session_id="test_sess_fallback")
     
     # Pre-populate memory
-    memory_engine.insert_or_reinforce_fact("Secret code is 12345.", category="secret", importance=10, confidence=1.0, scope_ids=["test_proj"])
+    insert_test_chunk(
+        raw_text="Secret code is 12345.",
+        caveman_text="Secret code is 12345.",
+        keywords=["secret", "code", "12345"],
+        tier="active",
+        project_id="test_proj"
+    )
     
     mock_client = MagicMock()
     

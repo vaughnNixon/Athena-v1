@@ -6,6 +6,7 @@ import config
 import providers
 import retrieval
 import distillation
+import chunk_pipeline
 import athena_compression
 
 logger = logging.getLogger("athena.agent_loop")
@@ -106,11 +107,12 @@ class AthenaAgent:
                 if tool_call["name"] == "retrieve_memories":
                     # Execute memory retrieval
                     query = tool_call["arguments"].get("query", user_message)
-                    memories_block = retrieval.retrieve_relevant_memories(
+                    staged_result = retrieval.retrieve_memories_staged(
                         query=query,
-                        scope_ids=[self.project_id],
-                        limit=5
+                        scope_ids=[self.project_id]
                     )
+                    # Format staged chunks into text block for LLM context
+                    memories_block = _format_staged_result(staged_result)
                     
                     # Inject tool result into history
                     messages.append({
@@ -154,6 +156,20 @@ class AthenaAgent:
             agent_msg=assistant_content,
             scope_ids=[self.project_id]
         )
+        
+        # 9. Trigger async chunk ingestion from the latest turn
+        import threading
+        def run_ingestion_thread():
+            try:
+                turn_messages = [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": assistant_content}
+                ]
+                chunk_pipeline.process_conversation_to_chunks(turn_messages)
+                logger.info("Chunk ingestion completed for turn.")
+            except Exception as chunk_exc:
+                logger.warning("Chunk ingestion failed (non-fatal): %s", chunk_exc)
+        threading.Thread(target=run_ingestion_thread, daemon=True).start()
         
         return assistant_content
 
@@ -214,11 +230,11 @@ class AthenaAgent:
                         logger.warning("Provider %s does not support tool calling: %s. Falling back to pre-retrieval.", provider, tool_exc)
                         
                         user_msg = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
-                        memories_block = retrieval.retrieve_relevant_memories(
+                        staged_result = retrieval.retrieve_memories_staged(
                             query=user_msg,
-                            scope_ids=[self.project_id],
-                            limit=5
+                            scope_ids=[self.project_id]
                         )
+                        memories_block = _format_staged_result(staged_result)
                         fallback_messages = list(cleaned_messages)
                         if memories_block:
                             sys_msg = fallback_messages[0].copy()
@@ -301,3 +317,31 @@ def get_retrieve_memories_tool_definition() -> dict:
     }
 
 
+def _format_staged_result(staged_result: dict) -> str:
+    """
+    Converts a staged retrieval result dict into a formatted text block
+    suitable for LLM context injection.
+    """
+    chunks = staged_result.get("supplied_chunks", [])
+    if not chunks:
+        return staged_result.get("message", "")
+    
+    lines = ["[ATHENA MEMORY]"]
+    for chunk in chunks:
+        text = chunk.get("caveman_text") or chunk.get("raw_text", "")
+        if text:
+            lines.append(f"• {text}")
+    
+    formatted = "\n".join(lines)
+    
+    # Headroom check: Limit injection size to ~500 tokens (roughly 2000 chars)
+    while len(formatted) > 2000 and len(chunks) > 1:
+        chunks.pop()
+        lines = ["[ATHENA MEMORY]"]
+        for chunk in chunks:
+            text = chunk.get("caveman_text") or chunk.get("raw_text", "")
+            if text:
+                lines.append(f"• {text}")
+        formatted = "\n".join(lines)
+    
+    return formatted

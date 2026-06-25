@@ -209,10 +209,14 @@ def cosine_similarity(v1: list, v2: list) -> float:
 def generate_embedding(text: str) -> list:
     """
     Generates embedding vector for the text using the current routed client.
+    Only attempts providers that support the embeddings API.
     """
     import providers
     skip_providers = []
     skip_keys = {}
+    
+    # Providers known not to support /embeddings endpoint
+    _NON_EMBEDDING_PROVIDERS = {"github-copilot", "groq", "nvidia"}
     
     while True:
         try:
@@ -223,6 +227,12 @@ def generate_embedding(text: str) -> list:
         except Exception as exc:
             logger.error("No providers left for embedding generation: %s", exc)
             raise exc
+        
+        # Skip providers that don't support embeddings
+        if provider in _NON_EMBEDDING_PROVIDERS:
+            skip_providers.append(provider)
+            logger.info("Skipping non-embedding provider '%s'.", provider)
+            continue
             
         try:
             embed_model = model
@@ -385,7 +395,7 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                             chunk_vector = generate_embedding(raw_text)
                             blob_data = vector_to_blob(chunk_vector)
                             cursor.execute("""
-                                INSERT INTO chunk_embeddings (chunk_id, provider, model, dimensions, embedding, created_at)
+                                INSERT OR IGNORE INTO chunk_embeddings (chunk_id, provider, model, dimensions, embedding, created_at)
                                 VALUES (?, ?, ?, ?, ?, ?)
                             """, (chunk_id, active_provider, active_model, len(chunk_vector), blob_data, int(time.time())))
                             conn.commit()

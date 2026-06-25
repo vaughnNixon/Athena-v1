@@ -219,6 +219,12 @@ def run_chat_loop(project_id: str, session_id: str):
                 continue
                 
             if stripped_input.lower() in {"/quit", "/exit", "quit", "exit"}:
+                # Run a final memory sweep to tier any new chunks before exiting
+                try:
+                    memory_sweep.run_memory_sweep()
+                    console.print("[dim]Memory sweep completed.[/dim]")
+                except Exception as e:
+                    logger.error("Exit sweep failed: %s", e)
                 console.print("\n[bold red]Exiting Athena session. Goodbye.[/bold red]\n")
                 break
                 
