@@ -578,6 +578,32 @@ def process_conversation_to_chunks(messages: list[dict], target_chunk_size: int 
         raise exc
     finally:
         conn.close()
-
-        
     return chunk_ids
+
+
+def process_memory_payload(items: list[str], scope_ids: list[str]) -> None:
+    """Takes the accepted items from memory gating, formats them as synthetic
+    conversation turns, and passes them through the existing
+    process_conversation_to_chunks() pipeline.
+    """
+    if not items:
+        return
+        
+    messages = []
+    now = int(time.time())
+    for item in items:
+        # Wrap each item as synthetic user/assistant conversation turns
+        messages.append({
+            "role": "user",
+            "content": f"Please retain the following memory context: {item}",
+            "timestamp": now
+        })
+        messages.append({
+            "role": "assistant",
+            "content": f"Memory retained: {item}",
+            "timestamp": now
+        })
+        
+    # Process using the existing chunk pipeline
+    process_conversation_to_chunks(messages)
+

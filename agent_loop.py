@@ -10,6 +10,10 @@ import distillation
 import chunk_pipeline
 import athena_compression
 import learning_engine
+import threading
+import task_planner
+import worker
+import memory_gating
 
 logger = logging.getLogger("athena.agent_loop")
 
@@ -30,6 +34,8 @@ class AthenaAgent:
             "timestamp": 0
         }
         self.last_retrieval_trace = None
+        self.last_subagent_result = None
+        self.last_subagent_gating = None
         
     def _load_history(self) -> list:
         if self.history_file.exists():
@@ -130,6 +136,34 @@ class AthenaAgent:
                 self._save_history()
                 
                 return corrected_answer
+
+        # Task Planner Routing
+        plan = task_planner.plan(user_message, project_id=self.project_id)
+        if plan:
+            result = worker.execute(plan)
+            self.last_subagent_result = result
+            
+            # Gate the memory payload
+            gate_result = memory_gating.filter(result.memory_payload, result.aal_summary)
+            self.last_subagent_gating = gate_result
+            
+            # Ingest approved items (synchronously in tests to avoid DB locks, otherwise in background thread)
+            import sys
+            if "pytest" in sys.modules:
+                chunk_pipeline.process_memory_payload(gate_result["accepted"], [self.project_id])
+            else:
+                threading.Thread(
+                    target=chunk_pipeline.process_memory_payload,
+                    args=(gate_result["accepted"], [self.project_id]),
+                    daemon=True
+                ).start()
+            
+            # Store user message and worker result in history
+            self.history.append({"role": "user", "content": user_message})
+            self.history.append({"role": "assistant", "content": result.user_output})
+            self._save_history()
+            
+            return result.user_output
 
         # 1. Build system prompt
         if self.caveman_mode:

@@ -566,6 +566,74 @@ def run_chat_loop(project_id: str, session_id: str):
                         console.print("[dim]No chunks were returned by retrieval.[/dim]")
                 continue
 
+            if cmd_lower == "/subagent":
+                from rich.table import Table
+                from rich.panel import Panel
+                
+                result = getattr(agent, "last_subagent_result", None)
+                gating = getattr(agent, "last_subagent_gating", None)
+                
+                if result is None:
+                    console.print("[dim]No subagent execution history available yet. Run a subagent task first.[/dim]")
+                else:
+                    aal = result.aal_summary
+                    
+                    # Header Panel
+                    outcome = aal.get("outcome", "failed")
+                    outcome_style = "green" if outcome == "success" else "yellow" if outcome == "partial" else "red"
+                    header_lines = [
+                        f"[bold]Task        :[/bold] {aal.get('task')}",
+                        f"[bold]Skill Used  :[/bold] [yellow]{aal.get('skill_used')}[/yellow]",
+                        f"[bold]Outcome     :[/bold] [{outcome_style}]{outcome}[/{outcome_style}]",
+                        f"[bold]Confidence  :[/bold] {aal.get('confidence', 0.0):.2f}",
+                        f"[bold]Notes       :[/bold] {aal.get('notes', 'None')}",
+                    ]
+                    console.print(Panel("\n".join(header_lines), title="[bold cyan]Last Subagent Execution Summary[/bold cyan]", border_style="cyan"))
+                    
+                    # Memory Gating Summary
+                    if gating:
+                        gate_table = Table(title="Memory Gating Summary", title_style="bold white", border_style="dim")
+                        gate_table.add_column("Status", style="white")
+                        gate_table.add_column("Count", justify="right", style="cyan")
+                        gate_table.add_column("Items / Details", style="white")
+                        
+                        accepted_count = len(gating.get("accepted", []))
+                        rejected_count = len(gating.get("rejected", []))
+                        
+                        accepted_details = ", ".join(gating.get("accepted", []))
+                        rejected_details = ", ".join(gating.get("rejected", []))
+                        
+                        accepted_short = accepted_details[:80] + ("..." if len(accepted_details) > 80 else "")
+                        rejected_short = rejected_details[:80] + ("..." if len(rejected_details) > 80 else "")
+                        
+                        gate_table.add_row("[green]Accepted[/green]", str(accepted_count), accepted_short if accepted_count > 0 else "[dim]—[/dim]")
+                        gate_table.add_row("[red]Rejected[/red]", str(rejected_count), rejected_short if rejected_count > 0 else "[dim]—[/dim]")
+                        console.print(gate_table)
+                        console.print(f"  [bold]Gating Decision Reason:[/bold] [dim]{gating.get('reason')}[/dim]")
+                    else:
+                        console.print("[dim]No memory gating info available for the last run.[/dim]")
+                        
+                    # Artifacts Table
+                    artifacts = result.artifacts
+                    if artifacts:
+                        art_table = Table(title="Artifacts Produced", title_style="bold white", border_style="dim")
+                        art_table.add_column("Filename", style="white")
+                        art_table.add_column("Path", style="cyan")
+                        art_table.add_column("Type", style="yellow")
+                        art_table.add_column("Description", style="white")
+                        for art in artifacts:
+                            art_table.add_row(
+                                art.get("filename", "unknown"),
+                                art.get("path", "unknown"),
+                                art.get("type", "other"),
+                                art.get("description", "")
+                            )
+                        console.print(art_table)
+                    else:
+                        console.print("[dim]No artifacts were produced by the subagent.[/dim]")
+                continue
+
+
             # Process turn
             console.print("[dim]Athena is thinking...[/dim]", end="\r")
             response = agent.run_one_turn(stripped_input)

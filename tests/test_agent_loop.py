@@ -45,7 +45,8 @@ def setup_teardown():
     config.ensure_athena_dirs()
     memory_engine.initialize_db()
     with patch("chunk_pipeline.process_conversation_to_chunks") as mock_process:
-        yield mock_process
+        with patch("task_planner.plan", return_value=None):
+            yield mock_process
     # Cleanup
     db_path = memory_engine.get_db_path()
     if db_path.exists():

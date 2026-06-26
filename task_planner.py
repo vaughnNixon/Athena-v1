@@ -1,0 +1,132 @@
+import json
+import logging
+import providers
+from retrieval import retrieve_memories_staged
+
+logger = logging.getLogger("athena.task_planner")
+
+def plan(user_message: str, project_id: str = None) -> dict | None:
+    """Queries Athena's memory for relevant past context, determines the skill,
+    and returns a structured plan dict or None if the query is conversational.
+    """
+    # 1. Query memory first
+    retrieval_res = retrieve_memories_staged(user_message, scope_ids=[project_id] if project_id else None)
+    supplied_chunks = retrieval_res.get("supplied_chunks", [])
+    memory_context = "\n".join([c.get("raw_text", "") for c in supplied_chunks])
+    
+    # Extract prior outcome from the context
+    prior_outcome = None
+    for chunk in supplied_chunks:
+        text = chunk.get("raw_text", "").lower()
+        if "outcome" in text:
+            if "success" in text:
+                prior_outcome = "success"
+                break
+            elif "failed" in text or "failure" in text:
+                prior_outcome = "failed"
+                break
+            elif "partial" in text:
+                prior_outcome = "partial"
+                break
+
+    # 2. Determine skill (Stage A: Deterministic Rules)
+    q = user_message.lower()
+    
+    # Phrase and keyword checks
+    file_reader_phrases = ["read file", "open file", "parse file", "load file", "view file", "read_file", "open_file"]
+    web_search_phrases = ["look up", "look-up", "search web", "web search"]
+    
+    has_file_reader = any(p in q for p in file_reader_phrases) or any(w in q.split() for w in ["parse"])
+    has_web_search = any(p in q for p in web_search_phrases) or any(w in q.split() for w in ["search", "find", "latest", "google", "web"])
+    has_code_runner = any(w in q.split() for w in ["run", "execute", "script", "calculate", "compute", "eval"])
+    has_writer = any(w in q.split() for w in ["write", "draft", "summarise", "summarize", "report"])
+    
+    matched_skills = []
+    if has_file_reader: matched_skills.append("file_reader")
+    if has_web_search: matched_skills.append("web_search")
+    if has_code_runner: matched_skills.append("code_runner")
+    if has_writer: matched_skills.append("writer")
+    
+    skill = None
+    task_desc = user_message
+    
+    if len(matched_skills) == 1:
+        skill = matched_skills[0]
+    else:
+        # Stage B: LLM Fallback
+        skip_providers = []
+        skip_keys = {}
+        llm_success = False
+        max_retries = 3
+        attempts = 0
+        while attempts < max_retries:
+            attempts += 1
+            try:
+                client, model, provider = providers.get_routing_client(
+                    skip_providers=skip_providers,
+                    skip_keys=skip_keys
+                )
+            except Exception as exc:
+                logger.warning("No healthy LLM provider for task planner: %s.", exc)
+                break
+                
+            try:
+                prompt = (
+                    f"Analyze the following user query and decide if it is a task requiring a specialized subagent skill.\n"
+                    f"User query: '{user_message}'\n\n"
+                    f"Available skills:\n"
+                    f"- 'web_search': Searching the web, looking up latest info, finding details online.\n"
+                    f"- 'code_runner': Running/executing scripts, calculations, executing code blocks.\n"
+                    f"- 'writer': Writing drafts, summarising, generating reports, creative/technical writing.\n"
+                    f"- 'file_reader': Reading/opening/parsing files on disk.\n\n"
+                    f"If the query is conversational (e.g. greetings like 'hello', general chat, asking about Athena, "
+                    f"or a question that doesn't require performing a concrete task using the above skills), "
+                    f"return exactly this JSON: {{\"is_task\": false, \"skill\": null, \"task_description\": null}}\n\n"
+                    f"Otherwise, return JSON in this format:\n"
+                    f"{{\"is_task\": true, \"skill\": \"<one of the skills above>\", \"task_description\": \"<cleaned task description>\"}}"
+                )
+                
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a JSON-only task planning assistant."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0
+                )
+                content = response.choices[0].message.content
+                providers.record_success(provider)
+                
+                data = json.loads(content)
+                if data.get("is_task"):
+                    skill = data.get("skill")
+                    task_desc = data.get("task_description") or user_message
+                else:
+                    skill = None
+                llm_success = True
+                break
+            except Exception as exc:
+                logger.warning("LLM task planner call failed on provider %s: %s. Retrying...", provider, exc)
+                active_key = getattr(client, "key", None)
+                if active_key:
+                    skip_keys.setdefault(provider, []).append(active_key)
+                else:
+                    skip_providers.append(provider)
+        
+        if not llm_success:
+            # Fallback: if multiple categories matched deterministically, choose the first
+            if len(matched_skills) > 1:
+                skill = matched_skills[0]
+            else:
+                skill = None
+
+    if not skill:
+        return None
+        
+    return {
+        "skill": skill,
+        "task_description": task_desc,
+        "memory_context": memory_context,
+        "prior_outcome": prior_outcome
+    }

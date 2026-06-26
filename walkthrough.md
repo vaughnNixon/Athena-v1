@@ -227,3 +227,31 @@ All **60 tests** are passing successfully:
 ============================= 60 passed in 5.61s ==============================
 ```
 
+---
+
+## 11. Athena v1.2 — Subagent System
+
+We successfully implemented the subagent execution system (v1.2) according to the approved plan.
+
+### Key Architecture Components
+- **SubagentResult (`subagent_result.py`)**: A 4-part structured return contract representing `user_output` (UI visibility), `aal_summary` (handoff details like outcome, confidence, skill, notes), `memory_payload` (candidate memory strings), and `artifacts` (files/reports). Includes documented-only forward compatibility for future `MemoryItem` structured objects.
+- **Skill Version Registry (`skills/`)**: Added a base skill contract (`BaseSkill`) and registry (`skills/__init__.py`) enforcing version check compatibility (`athena_api_version = 1`). Mismatched skills raise `IncompatibleSkillError` at registration time.
+- **Task Planner (`task_planner.py`)**: Queries Athena's memory context first before routing. Classifies task skill using Stage A (deterministic keyword rules) and falls back to Stage B (LLM call with a 3-attempt retry safety limit) or returns `None` for conversational turns.
+- **Stateless Worker (`worker.py`)**: Dynamically loads registered skills and executes plans within a crash-proof wrapper that converts raw exceptions into structured failure results.
+- **Central Memory Gating (`memory_gating.py`)**: Filters incoming memory payloads from workers. Rejects entire payloads on failure or low confidence (<0.3). Drops empty strings, short strings (<20 characters), and checks SHA-256 hashes or text matches against database chunks/facts to prevent duplication.
+- **Synthetic Ingestion Pipeline (`chunk_pipeline.py`)**: Added `process_memory_payload` which wraps approved gated memory payload strings into synthetic chronological user/assistant conversation turn messages and processes them directly into standard database chunks.
+- **Parallel Agent Loop Path (`agent_loop.py`)**: Routes task planner plans directly to subagent execution, bypassing conversational LLM logic. Runs chunk pipeline ingestion synchronously during pytest runs to prevent database file locks, and asynchronously in background threads otherwise.
+- **CLI `/subagent` Command (`main.py`)**: Displays formatted execution details for the last subagent run, showing plans, outcome state, confidence, accepted/rejected memory items, and produced artifacts in a stylized Rich panel.
+
+### Test Verification
+Added **11 new automated unit tests** covering all components:
+- Staged planning, keyword routing, LLM fallbacks, and outcome extraction (`test_task_planner.py`)
+- Version registration compatibility checks and worker execution safety (`test_worker.py`)
+- Outcome, confidence, and deduplication gating criteria (`test_memory_gating.py`)
+
+All **78 tests** (67 existing + 11 new) are passing successfully:
+```powershell
+============================= 78 passed in 7.83s ==============================
+```
+
+
