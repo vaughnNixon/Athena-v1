@@ -29,6 +29,7 @@ class AthenaAgent:
             "retrieval_stage": "none",
             "timestamp": 0
         }
+        self.last_retrieval_trace = None
         
     def _load_history(self) -> list:
         if self.history_file.exists():
@@ -102,6 +103,7 @@ class AthenaAgent:
                     "retrieval_stage": staged_result.get("retrieval_stage", "none"),
                     "timestamp": int(time.time())
                 }
+                self.last_retrieval_trace = staged_result.get("trace")
                 
                 memories_block = _format_staged_result(staged_result)
                 
@@ -198,6 +200,7 @@ class AthenaAgent:
                         "retrieval_stage": staged_result.get("retrieval_stage", "none"),
                         "timestamp": int(time.time())
                     }
+                    self.last_retrieval_trace = staged_result.get("trace")
                     
                     # Format staged chunks into text block for LLM context
                     memories_block = _format_staged_result(staged_result)
@@ -331,6 +334,7 @@ class AthenaAgent:
                             "retrieval_stage": staged_result.get("retrieval_stage", "none"),
                             "timestamp": int(time.time())
                         }
+                        self.last_retrieval_trace = staged_result.get("trace")
                         
                         memories_block = _format_staged_result(staged_result)
                         fallback_messages = list(cleaned_messages)

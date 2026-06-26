@@ -496,7 +496,76 @@ def run_chat_loop(project_id: str, session_id: str):
                 finally:
                     conn.close()
                 continue
-            
+
+            if cmd_lower == "/trace":
+                from rich.table import Table
+                from rich.panel import Panel
+                tr = getattr(agent, "last_retrieval_trace", None)
+                if tr is None:
+                    console.print("[dim]No retrieval trace available yet. Ask a question first.[/dim]")
+                else:
+                    # --- Header panel ---
+                    threshold_note = ""
+                    if tr.threshold_adjusted and tr.adjusted_threshold is not None:
+                        threshold_note = f" [dim](adjusted from higher — low accuracy for intent)[/dim]"
+                    forced_note = "[bold red]Yes[/bold red]" if tr.force_desperation else "[dim]No[/dim]"
+                    header_lines = [
+                        f"[bold]Query   :[/bold] {tr.query}",
+                        f"[bold]Intent  :[/bold] [yellow]{tr.intent}[/yellow]",
+                        f"[bold]Threshold:[/bold] {tr.threshold:.2f}{threshold_note}",
+                        f"[bold]Forced Desperation:[/bold] {forced_note}",
+                    ]
+                    console.print(Panel("\n".join(header_lines), title="[bold cyan]Retrieval Trace[/bold cyan]", border_style="cyan"))
+
+                    # --- Stage execution table ---
+                    stage_table = Table(title="Stage Execution", title_style="bold white", border_style="dim")
+                    stage_table.add_column("Stage", style="white", min_width=18)
+                    stage_table.add_column("Candidates", justify="right", style="white")
+                    stage_table.add_column("Time (ms)", justify="right", style="green")
+
+                    stage_display_map = {
+                        "classification": "Classification",
+                        "active_search": "Active Search",
+                        "passive_search": "Passive Search",
+                        "semantic_search": "Semantic Search",
+                        "desperation": "Desperation",
+                    }
+                    for stage_key, stage_label in stage_display_map.items():
+                        timing = tr.stage_timings.get(stage_key, "skipped")
+                        count = tr.candidate_counts.get(stage_key, "—")
+                        if timing == "skipped":
+                            stage_table.add_row(
+                                f"[dim]{stage_label}[/dim]",
+                                "[dim]skipped[/dim]",
+                                "[dim]skipped[/dim]",
+                            )
+                        else:
+                            fired = stage_key == tr.stage_fired or (stage_key == "desperation" and tr.stage_fired == "desperation_mode")
+                            label = f"[bold green]{stage_label} ✓[/bold green]" if fired else stage_label
+                            stage_table.add_row(label, str(count), str(timing))
+
+                    console.print(stage_table)
+                    console.print(
+                        f"  [bold]Stage Fired:[/bold] [bold green]{tr.stage_fired}[/bold green]  |  "
+                        f"[bold]Total:[/bold] [bold white]{tr.total_duration_ms} ms[/bold white]"
+                    )
+
+                    # --- Top chunks table ---
+                    if tr.top_chunk_ids:
+                        chunk_table = Table(title="Top Chunks Returned", title_style="bold white", border_style="dim")
+                        chunk_table.add_column("Chunk ID", style="white")
+                        chunk_table.add_column("Score", justify="right", style="cyan")
+                        chunk_table.add_column("Skip Mark", justify="right", style="yellow")
+                        for cid in tr.top_chunk_ids:
+                            score = tr.top_chunk_scores.get(cid, 0.0)
+                            skip = tr.skip_marks_applied.get(cid, 0.0)
+                            skip_str = f"{skip:.4f}" if skip > 0.0 else "[dim]0.00[/dim]"
+                            chunk_table.add_row(cid, f"{score:.4f}", skip_str)
+                        console.print(chunk_table)
+                    else:
+                        console.print("[dim]No chunks were returned by retrieval.[/dim]")
+                continue
+
             # Process turn
             console.print("[dim]Athena is thinking...[/dim]", end="\r")
             response = agent.run_one_turn(stripped_input)

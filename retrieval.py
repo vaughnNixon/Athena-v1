@@ -6,6 +6,7 @@ import struct
 from pathlib import Path
 import config
 import memory_engine
+from retrieval_trace import RetrievalTrace
 
 logger = logging.getLogger("athena.retrieval")
 
@@ -265,44 +266,81 @@ def generate_embedding(text: str) -> list:
 def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
     """
     Executes the staged retrieval pipeline to fetch chunks.
+
+    Always generates a RetrievalTrace capturing the full execution record
+    (stages attempted, candidate counts, confidence, timing, skip marks).
+    The trace is returned under the "trace" key in the result dict and stored
+    by the caller on agent.last_retrieval_trace. It has zero side effects.
     """
+    fn_start = time.perf_counter()
+
     cfg = config.load_config()
     mem_cfg = cfg.get("memory", {})
     threshold = float(mem_cfg.get("keyword_confidence_threshold", 0.6))
+    original_threshold = threshold
     emb_enabled = bool(mem_cfg.get("embedding_enabled", False))
     emb_top_k = int(mem_cfg.get("embedding_top_k", 3))
     desperation_enabled = bool(mem_cfg.get("desperation_enabled", True))
-    
+
     query_words = get_word_set(query)
-    
-    # Stage 0: Classification
+
+    # --------------- Stage 0: Classification --------------------------------
+    t0 = time.perf_counter()
     intent = classify_query_intent(query)
-    
+
     # Check for user error/wrong signal to force desperation mode
     wrong_terms = ["wrong", "incorrect", "not true", "fabricate", "hallucinate", "incorrect memory", "wrong memory"]
     force_desperation = any(term in query.lower() for term in wrong_terms)
-    
+
     conn = memory_engine.get_db_connection()
     cursor = conn.cursor()
-    
+
     # Adaptive threshold adjustment based on query statistics
+    threshold_adjusted = False
+    adjusted_threshold = None
     try:
         cursor.execute("SELECT accuracy FROM query_statistics WHERE query_type = ?", (intent,))
         stats_row = cursor.fetchone()
         if stats_row and stats_row[0] < 0.8:
             threshold = max(0.2, threshold - 0.1)
+            threshold_adjusted = True
+            adjusted_threshold = threshold
     except Exception as stats_exc:
         logger.warning("Failed to query query_statistics for threshold adjustment: %s", stats_exc)
 
-    def score_chunks(target_tiers: list) -> list:
+    classification_ms = time.perf_counter() - t0
+
+    # Build the trace object (populated inline as stages execute)
+    trace = RetrievalTrace(
+        query=query,
+        intent=intent,
+        threshold=threshold,
+        threshold_adjusted=threshold_adjusted,
+        adjusted_threshold=adjusted_threshold,
+        force_desperation=force_desperation,
+    )
+    trace.record_stage_timing("classification", classification_ms)
+
+    # --------------- Inner helper -------------------------------------------
+    def score_chunks(target_tiers: list) -> tuple:
+        """
+        Score chunks from the given tiers against the query.
+
+        Returns
+        -------
+        tuple[list[dict], dict[str, float]]
+            (scored_and_sorted_chunks, skip_map)
+            skip_map is returned so the caller can record which skip marks
+            were applied, without re-querying the DB.
+        """
         placeholders = ",".join("?" for _ in target_tiers)
         cursor.execute(f"""
-            SELECT chunk_id, sequence_number, tier, raw_text, caveman_text, metadata 
-            FROM chunks 
+            SELECT chunk_id, sequence_number, tier, raw_text, caveman_text, metadata
+            FROM chunks
             WHERE tier IN ({placeholders})
         """, target_tiers)
         rows = cursor.fetchall()
-        
+
         # Load skip marks for the current intent
         skip_map = {}
         try:
@@ -311,22 +349,22 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                 skip_map[cid] = float(score)
         except Exception as skip_exc:
             logger.warning("Failed to load skip marks: %s", skip_exc)
-            
+
         scored = []
         cursor.execute("SELECT IFNULL(MAX(sequence_number), 0) FROM chunks")
         max_seq = cursor.fetchone()[0]
-        
+
         for row in rows:
             chunk_id, seq_num, tier, raw_text, caveman_text, metadata_json = row
             try:
                 meta = json.loads(metadata_json) if metadata_json else {}
             except Exception:
                 meta = {}
-                
+
             cursor.execute("SELECT keyword FROM chunk_keywords WHERE chunk_id = ?", (chunk_id,))
             chunk_kws = set(r[0] for r in cursor.fetchall())
             kw_overlap = calculate_overlap_score(query_words, chunk_kws)
-            
+
             meta_words = set()
             for key in ["projects", "technologies", "themes", "legacy_category"]:
                 val = meta.get(key)
@@ -336,28 +374,28 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                 elif isinstance(val, str):
                     meta_words.update(get_word_set(val))
             meta_score = calculate_overlap_score(query_words, meta_words)
-            
+
             entities = set()
             val_ent = meta.get("entities")
             if isinstance(val_ent, list):
                 for e in val_ent:
                     entities.update(get_word_set(e))
             entity_score = calculate_overlap_score(query_words, entities)
-            
+
             recency_boost = 0.1 * (seq_num / max_seq) if max_seq > 0 else 0.0
-            
+
             intent_boost = 0.0
             if intent in ["projects", "technical", "tasks"]:
                 if meta.get("projects") or meta.get("technologies"):
                     intent_boost = 0.05
-                    
+
             composite_score = kw_overlap * 0.5 + meta_score * 0.2 + entity_score * 0.1 + recency_boost + intent_boost
-            
+
             # Apply learning skip marks penalty: composite_score * (1.0 - skip_score)
             skip_score = skip_map.get(chunk_id, 0.0)
             penalty_factor = max(0.0, 1.0 - skip_score)
             final_score = composite_score * penalty_factor
-            
+
             scored.append({
                 "chunk_id": chunk_id,
                 "sequence_number": seq_num,
@@ -366,58 +404,74 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                 "caveman_text": caveman_text,
                 "score": min(1.0, final_score)
             })
-            
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored
 
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored, skip_map
+
+    # --------------- Stage execution ----------------------------------------
     try:
         if not force_desperation:
             # Stage 1: Active & Mixed chunks
-            active_results = score_chunks(["active", "mixed"])
+            t1 = time.perf_counter()
+            active_results, active_skip_map = score_chunks(["active", "mixed"])
+            trace.stages_attempted.append("active_search")
+            trace.candidate_counts["active_search"] = len(active_results)
+            trace.record_stage_timing("active_search", time.perf_counter() - t1)
+            trace.record_skip_marks(active_skip_map, active_results)
+
             if active_results and active_results[0]["score"] >= threshold:
-                best = active_results[0]
                 matches = [r for r in active_results if r["score"] >= threshold]
+                trace.finalize("active_search", matches, fn_start)
                 return {
                     "matched_chunk_ids": [r["chunk_id"] for r in matches],
-                    "confidence_score": best["score"],
+                    "confidence_score": active_results[0]["score"],
                     "retrieval_stage": "active_search",
-                    "supplied_chunks": matches
+                    "supplied_chunks": matches,
+                    "trace": trace,
                 }
-                
+
             # Stage 2: Passive chunks
-            passive_results = score_chunks(["passive"])
+            t2 = time.perf_counter()
+            passive_results, passive_skip_map = score_chunks(["passive"])
+            trace.stages_attempted.append("passive_search")
+            trace.candidate_counts["passive_search"] = len(passive_results)
+            trace.record_stage_timing("passive_search", time.perf_counter() - t2)
+            trace.record_skip_marks(passive_skip_map, passive_results)
+
             if passive_results and passive_results[0]["score"] >= threshold:
-                best = passive_results[0]
                 matches = [r for r in passive_results if r["score"] >= threshold]
+                trace.finalize("passive_search", matches, fn_start)
                 return {
                     "matched_chunk_ids": [r["chunk_id"] for r in matches],
-                    "confidence_score": best["score"],
+                    "confidence_score": passive_results[0]["score"],
                     "retrieval_stage": "passive_search",
-                    "supplied_chunks": matches
+                    "supplied_chunks": matches,
+                    "trace": trace,
                 }
-                
+
             # Stage 3: Semantic Retrieval (cosine similarity on chunk_embeddings)
             if emb_enabled:
                 try:
+                    t3 = time.perf_counter()
                     query_emb = generate_embedding(query)
-                    
+
                     cursor.execute("SELECT chunk_id, raw_text, tier, sequence_number, caveman_text FROM chunks WHERE tier != 'unclassified'")
                     rows = cursor.fetchall()
-                    
+
                     semantic_matches = []
                     import providers
                     try:
                         _, active_model, active_provider = providers.get_routing_client()
                     except Exception:
                         active_model, active_provider = "default", "default"
-                        
+
                     for chunk_id, raw_text, tier, seq_num, caveman_text in rows:
                         cursor.execute("""
-                            SELECT embedding FROM chunk_embeddings 
+                            SELECT embedding FROM chunk_embeddings
                             WHERE chunk_id = ? AND provider = ? AND model = ?
                         """, (chunk_id, active_provider, active_model))
                         eb_row = cursor.fetchone()
-                        
+
                         if eb_row:
                             chunk_vector = blob_to_vector(eb_row[0])
                         else:
@@ -428,7 +482,7 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                                 VALUES (?, ?, ?, ?, ?, ?)
                             """, (chunk_id, active_provider, active_model, len(chunk_vector), blob_data, int(time.time())))
                             conn.commit()
-                            
+
                         sim = cosine_similarity(query_emb, chunk_vector)
                         semantic_matches.append({
                             "chunk_id": chunk_id,
@@ -438,45 +492,59 @@ def retrieve_memories_staged(query: str, scope_ids: list = None) -> dict:
                             "caveman_text": caveman_text,
                             "score": sim
                         })
-                        
+
                     semantic_matches.sort(key=lambda x: x["score"], reverse=True)
+                    trace.stages_attempted.append("semantic_search")
+                    trace.candidate_counts["semantic_search"] = len(semantic_matches)
+                    trace.record_stage_timing("semantic_search", time.perf_counter() - t3)
+
                     if semantic_matches and semantic_matches[0]["score"] >= threshold:
-                        best = semantic_matches[0]
                         matches = [r for r in semantic_matches[:emb_top_k] if r["score"] >= threshold]
+                        trace.finalize("semantic_search", matches, fn_start)
                         return {
                             "matched_chunk_ids": [r["chunk_id"] for r in matches],
-                            "confidence_score": best["score"],
+                            "confidence_score": semantic_matches[0]["score"],
                             "retrieval_stage": "semantic_search",
-                            "supplied_chunks": matches
+                            "supplied_chunks": matches,
+                            "trace": trace,
                         }
                 except Exception as sem_exc:
                     logger.warning("Semantic retrieval execution failed: %s. Skipping to next stage.", sem_exc)
 
         # Stage 4: Desperation Mode
         if desperation_enabled or force_desperation:
-            all_results = score_chunks(["active", "mixed", "passive", "unclassified"])
+            t4 = time.perf_counter()
+            all_results, desp_skip_map = score_chunks(["active", "mixed", "passive", "unclassified"])
+            trace.stages_attempted.append("desperation")
+            trace.candidate_counts["desperation"] = len(all_results)
+            trace.record_stage_timing("desperation", time.perf_counter() - t4)
+            trace.record_skip_marks(desp_skip_map, all_results[:3])
+
             if all_results:
-                best = all_results[0]
                 matches = all_results[:3]
                 examined_ids = [r["chunk_id"] for r in matches]
                 logger.info("Desperation Mode triggered. Examined chunks: %r", examined_ids)
+                trace.finalize("desperation_mode", matches, fn_start)
                 return {
                     "matched_chunk_ids": examined_ids,
-                    "confidence_score": best["score"],
+                    "confidence_score": all_results[0]["score"],
                     "retrieval_stage": "desperation_mode",
-                    "supplied_chunks": matches
+                    "supplied_chunks": matches,
+                    "trace": trace,
                 }
-                
+
     except Exception as exc:
         logger.error("Staged retrieval failed: %s", exc)
     finally:
         conn.close()
-        
+
+    trace.finalize("none", [], fn_start)
     return {
         "matched_chunk_ids": [],
         "confidence_score": 0.0,
         "retrieval_stage": "none",
         "supplied_chunks": [],
-        "message": "I couldn't find a reliable memory for that request."
+        "message": "I couldn't find a reliable memory for that request.",
+        "trace": trace,
     }
 
