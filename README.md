@@ -1,28 +1,54 @@
-# Athena v1.1 — Long-Term Memory Dialogue Agent
+# Athena v1.2 — Long-Term Memory Dialogue Agent with Subagent System
 
-Athena is an intelligent, memory-first dialogue agent layer designed to run across multiple inference providers while maintaining persistent long-term memory, context window compression discipline, proper keyless GitHub Copilot OAuth integration, and an extensible chunk-based database engine.
+Athena is an intelligent, memory-first dialogue agent designed to run across multiple inference providers while maintaining persistent long-term memory, context window compression, and a fully extensible subagent execution layer with centralised memory gating.
 
 ---
 
-## ── Architectural Turn Flow ──
+## ── Architecture Overview ──
 
-Athena leverages **LLM-controlled tool calling** to perform memory retrieval only when the model determines it needs past context, keeping standard responses latency-free:
+Athena has two parallel execution paths in `run_one_turn()`:
+
+### Path A — Subagent Task Execution
+For tasks that require a specialised skill (web search, code execution, writing, file reading), Athena routes through the subagent system before any conversational LLM call.
+
+```
+User Message
+    ↓
+Task Planner  ← queries Athena's memory for prior context first
+    ↓
+Determine Skill (Stage A: deterministic rules / Stage B: LLM fallback)
+    ↓
+Spawn Generic Stateless Worker
+    ↓
+Worker loads Skill → executes task
+    ↓
+SubagentResult { user_output, aal_summary, memory_payload, artifacts }
+    ↓
+Memory Gating  ← filters on outcome, confidence, length, deduplication
+    ↓
+chunk_pipeline.process_memory_payload()  ← approved items only
+    ↓
+Long-Term Memory (SQLite Chunks)
+```
+
+### Path B — Conversational LLM with Tool-Controlled Memory Retrieval
+For standard conversation turns, Athena uses LLM-controlled tool calling to retrieve memory only when the model decides it needs past context.
 
 ```mermaid
 graph TD
-    User([User Message]) --> SystemPrompt[1. Assemble system prompt & style toggle instruction]
-    SystemPrompt --> History[2. Load continuous history & apply headroom compression]
-    History --> Route{3. Call LLM with retrieve_memories tool available}
-    
-    Route -- LLM decides memory NOT needed --> Response[4a. Generate response immediately]
-    Route -- LLM calls retrieve_memories --> Retrieve[4b. Query chunk_keywords & chunks tables]
-    
+    User([User Message]) --> SystemPrompt[1. Assemble system prompt & style toggle]
+    SystemPrompt --> History[2. Load history & apply headroom compression]
+    History --> Route{3. Call LLM with retrieve_memories tool}
+
+    Route -- LLM decides memory NOT needed --> Response[4a. Respond immediately]
+    Route -- LLM calls retrieve_memories --> Retrieve[4b. Query chunk_keywords & chunks]
+
     Retrieve --> ToolResponse[5. Append memory context to conversation]
     ToolResponse --> FinalCall[6. Call LLM again with memory context]
     FinalCall --> Response
-    
-    Response --> Save[7. Save assistant reply to history & trigger asynchronous Fact Distillation & Chunk Ingestion]
-    Save --> DB[(SQLite Chunks & Keywords Store)]
+
+    Response --> Save[7. Save to history & trigger async Chunk Ingestion]
+    Save --> DB[(SQLite Chunks & Keywords)]
     Save --> Out([Assistant Response])
 ```
 
@@ -30,59 +56,68 @@ graph TD
 
 ## ── Running Tests ──
 
-To run the entire hermetic test suite (55 tests) inside the virtual environment:
+To run the entire hermetic test suite (**78 tests**) inside the virtual environment:
+
 ```powershell
 .venv\Scripts\python.exe -m pytest
 ```
-
 
 ---
 
 ## ── Core Features ──
 
-### 1. Universal Provider Manager with Multi-Key Rotation
-- **Schema & Persistence (`providers.json`)**: Configured dynamically; supports registering custom OpenAI-compatible endpoints (Grok, OpenRouter, Together, DeepInfra) without hardcoding.
-- **API Key Rotation**: Automatically rotates to the next API key inside a provider upon any failure (rate limits, timeouts, auth errors, quota exceeded).
-- **Auto-Failover**: Automatically switches to the next healthiest provider in the fallback chain if all keys for a provider are exhausted.
-- **Health Tracking**: Tracks request success/failure stats and consecutive failure rates per key and provider dynamically.
-- **Self-Healing Statistics**: Automatically resets all failure counts as a last resort if all configured options fail, avoiding permanent lockouts from transient outages.
+### 1. Subagent Execution System (v1.2)
 
-### 2. Next-Generation Memory Architecture & Lifecycle
-* **Intelligent Chunk Generation**:
-  - **Sentence Detection**: Deterministically segments raw conversation history while safely protecting URLs, decimals, and abbreviations.
-  - **LLM-Based Enrichment**: Batches chunks to extract Caveman summaries, keywords, themes, and entities.
-  - **Deterministic Fallback**: Uses local stop-word filtering if LLM providers are offline, guaranteeing memories are always created.
-* **Active/Passive Lifecycle Sweep**:
-  - **Token Budgeting**: Enforces a strict `active_token_budget` (default `50,000` tokens) using pre-calculated token estimates.
-  - **Chronological Demotions**: Promotes recent memories to the `active` tier and automatically demotes older memories to the `passive` tier to conserve LLM context.
-  - **Mixed Boundary Annotations**: Annotates chunks spanning the budget boundary as `mixed` instead of cutting them.
-* **Staged Memory Retrieval Engine**:
-  - **Stage 0 (Intent Classifier)**: Rules-based whole-word intent analysis (timeline, preferences, projects, etc.).
-  - **Stage 1 & 2 (Active/Passive Keyword Search)**: Sub-millisecond indexed keyword overlap scans. Exits early if confidence exceeds the threshold.
-  - **Stage 3 (Semantic Search)**: Computes cosine similarity of vectors using a dedicated `chunk_embeddings` table cache to prevent redundant paid API calls.
-  - **Stage 4 & 5 (Desperation & Fallback)**: Scans all chunks under user error/wrong correction signals and yields non-hallucinatory safe fallbacks.
-* **Metadata & Feedback Tables**:
-  - **Skip Marks (`skip_marks`)**: Stores learned query-type retrieval scores to optimize retrieval relevance.
-  - **User Feedback Logs (`feedback_log`)**: Maintains an append-only transaction history of user corrections for future feedback training.
+- **SubagentResult Contract**: Every skill must return a 4-part structured object — `user_output` (what the user sees), `aal_summary` (execution handoff dict with outcome/confidence/notes), `memory_payload` (knowledge for long-term storage), and `artifacts` (files, reports, CSVs on disk).
+- **Task Planner (`task_planner.py`)**: Queries Athena's memory for prior context first, then maps user messages to skills using deterministic keyword rules (Stage A) or an LLM call (Stage B). Returns `None` for conversational turns so they bypass the subagent path entirely.
+- **Generic Stateless Worker (`worker.py`)**: A crash-proof execution container that loads registered skills dynamically. Converts unhandled exceptions into structured failure results instead of crashing.
+- **Versioned Skill Registry (`skills/`)**: Each skill must declare a `name`, `version`, and `athena_api` integer. Skills with `athena_api != ATHENA_API_VERSION` are rejected at registration time with a clear `IncompatibleSkillError`, not at execution time.
+- **Memory Gating (`memory_gating.py`)**: Athena's filter layer between worker output and long-term storage:
+  - Rejects the entire payload if `outcome == "failed"` or `confidence < 0.3`
+  - Drops empty strings and items shorter than 20 characters
+  - Deduplicates against existing database facts (SHA-256 hash check) and chunks (text match)
+  - Only accepted items enter `chunk_pipeline.process_memory_payload()`
 
-### 3. Context Window Compression & Style Switcher
-- **Presentation-Only Switcher (`/caveman`)**: Dynamically toggles between natural dialogue and caveman sparse prose styles by injecting instructions into the system prompt.
-- **Uninterrupted History**: Keeps the entire conversation history intact across style switches, avoiding split sessions or context loss.
-- **Headroom AI transforms**: Compresses tool outputs and long logs using fast, native token-crushers.
+### 2. Universal Provider Manager with Multi-Key Rotation
 
-### 4. Interactive Setup & CLI Command Shell
-- **Interactive Wizard (`main.py onboard`)**: Walks you through configuring default providers and API keys.
-- **Diagnostics (`main.py doctor`)**: Validates folder structures, permissions, and database health metrics.
-- **Manual Sweep (`main.py sweep`)**: Manually run the active/passive memory lifecycle budget sweep.
+- **Schema & Persistence (`providers.json`)**: Supports registering custom OpenAI-compatible endpoints without hardcoding.
+- **API Key Rotation**: Rotates to the next API key per provider on any failure.
+- **Auto-Failover**: Switches to the next healthiest provider when all keys for one provider are exhausted.
+- **Health Tracking & Self-Healing**: Tracks request stats per key, automatically resets on full failure to avoid permanent lockouts.
+
+### 3. Next-Generation Chunk Memory Architecture
+
+- **Intelligent Chunk Generation**: Segments conversations into chronological chunks. LLM enriches them with Caveman summaries, keywords, themes, and entities. Falls back to deterministic local extraction when all providers are offline.
+- **Active/Passive Lifecycle Sweep**: Enforces a configurable `active_token_budget` (default `50,000` tokens). Demotes older chunks to `passive` tier chronologically. Annotates budget-boundary chunks as `mixed`.
+- **Staged Retrieval Engine**:
+  - **Stage 0** — Intent Classifier (rules-based whole-word matching)
+  - **Stage 1 & 2** — Active & Passive keyword overlap search (sub-millisecond indexed)
+  - **Stage 3** — Semantic cosine similarity search with cached `chunk_embeddings` table
+  - **Stage 4 & 5** — Desperation mode + non-hallucinatory safe fallback
+
+### 4. Adaptive Learning Engine
+
+- Detects user corrections and routes through the learning pipeline.
+- Two-stage chunk selection: deterministic Stage A ranking first, LLM arbitration (Stage B) for ambiguous cases.
+- Applies skip mark penalties to penalise bad retrieval chunks and rewards useful ones.
+- Maintains per-intent accuracy statistics and auto-adjusts retrieval thresholds for low-accuracy query types.
+
+### 5. Context Compression & Style Switcher
+
+- **Presentation Switcher (`/caveman`)**: Toggles between natural dialogue and sparse caveman prose without splitting session history.
+- **Headroom AI Compression**: Compresses long tool outputs and history using fast native token-crushers.
+
+### 6. Interactive CLI Command Shell
+
 - **Slash Commands**:
-  - `/providers`: Display registered providers, defaults, key counts, enabled status, active provider, and request metrics.
-  - `/provider add`: Interactive wizard to register a new provider (name, type, base URL, default model, and multiple keys).
-  - `/provider remove <id>`: Deletes a provider from the configuration.
-  - `/provider enable/disable <id>`: Dynamically toggles a provider's active eligibility status.
-  - `/provider select <id|auto>` (shortcut: `/provider <id>`): Manual active override or resets to health-based selection (`auto`).
-  - `/model select <model_id|default>` (shortcut: `/model <model_id>`): Manual model override or resets to provider defaults.
-  - `/caveman`: Toggle between caveman sparse prose style and natural conversational style.
-  - `/quit` / `/exit`: Cleanly exit the session.
+  - `/providers` — Display all configured providers, keys, health, and routing stats
+  - `/provider add/remove/enable/disable/select` — Manage provider configuration
+  - `/model select` — Override active model
+  - `/caveman` — Toggle presentation style
+  - `/trace` — Display the full retrieval trace of the last memory query (stages, timings, chunks, skip marks)
+  - `/subagent` — Display the last subagent execution summary (task, skill, outcome, memory gating results, artifacts)
+  - `/rollback` / `/learning` — Reset or inspect adaptive learning skip marks and accuracy stats
+  - `/quit` / `/exit` — Clean session exit
 
 ---
 
@@ -92,7 +127,6 @@ To run the entire hermetic test suite (55 tests) inside the virtual environment:
    ```powershell
    .venv\Scripts\python.exe main.py onboard
    ```
-   Enter API keys for your preferred providers.
 
 2. **Start Chatting**:
    ```powershell
@@ -104,3 +138,42 @@ To run the entire hermetic test suite (55 tests) inside the virtual environment:
    .venv\Scripts\python.exe main.py doctor
    ```
 
+4. **Manual Memory Sweep**:
+   ```powershell
+   .venv\Scripts\python.exe main.py sweep
+   ```
+
+---
+
+## ── Skill Development ──
+
+To add a skill, create a class that extends `BaseSkill` in the `skills/` directory:
+
+```python
+from skills.base_skill import BaseSkill
+from subagent_result import SubagentResult
+
+class MySkill(BaseSkill):
+    name = "my_skill"
+    version = "1.0"
+    athena_api = 1          # Must match ATHENA_API_VERSION = 1
+    description = "Does something useful"
+
+    def run(self, task: str, memory_context: str) -> SubagentResult:
+        # ... do the work ...
+        return SubagentResult(
+            user_output="Done.",
+            aal_summary={"task": task, "skill_used": self.name, "outcome": "success", "confidence": 0.95, "notes": ""},
+            memory_payload=["key observation about this task"],
+            artifacts=[]
+        )
+```
+
+Then register it:
+```python
+import skills
+from my_skill_module import MySkill
+skills.register(MySkill())
+```
+
+Skills with a mismatched `athena_api` version are rejected at registration with a clear error — they will never silently fail at execution time.
