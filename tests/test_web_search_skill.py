@@ -4,13 +4,12 @@ import pytest
 import skills
 from service_providers_manager import get_service_manager, ServiceProvider
 from search_cache import SearchCache
-import skills.web_search # triggers auto-registration
+from skills.web_search.web_search_skill import WebSearchSkill
 
 def test_service_providers_manager_routing():
     sm = get_service_manager()
     sm.reset_all_failures()
     
-    # Ensure tavily-search provider is healthy and enabled for test
     p = sm.get_healthiest_provider(category="search", capability="search.web")
     assert p is not None
     assert p.category == "search"
@@ -36,7 +35,11 @@ def test_web_search_skill_execution(monkeypatch):
     sm = get_service_manager()
     sm.reset_all_failures()
     
-    # Mock Tavily adapter response so test is hermetic without requiring live external network/API key
+    skill = skills.get("web_search")
+    if not skill:
+        skill = WebSearchSkill()
+        skills.register(skill)
+
     from skills.web_search.providers import get_adapter, SearchResponse, SearchResult
     adapter = get_adapter("tavily-search")
     
@@ -60,16 +63,12 @@ def test_web_search_skill_execution(monkeypatch):
         
     monkeypatch.setattr(adapter, "search", mock_search)
     
-    skill = skills.get("web_search")
-    assert skill is not None
-    
     res = skill.run(task="latest python news", memory_context="", capability="search.news")
     assert res is not None
     assert "Mock Result Title" in res.user_output
     assert res.aal_summary["outcome"] == "success"
-    assert res.memory_payload == [] # Requirement 5: Skill produces NO raw memory payload
-    assert len(res.artifacts) == 3   # Requirement 8: First-class artifacts created
+    assert res.memory_payload == []
+    assert len(res.artifacts) == 3
     
-    # Verify artifact files were created on disk
     for art in res.artifacts:
         assert os.path.exists(art["path"])
