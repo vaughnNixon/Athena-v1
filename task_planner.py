@@ -35,10 +35,10 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
     file_reader_phrases = ["read file", "open file", "parse file", "load file", "view file", "read_file", "open_file"]
     web_search_phrases = ["look up", "look-up", "search web", "web search"]
     
-    has_file_reader = any(p in q for p in file_reader_phrases) or any(w in q.split() for w in ["parse"])
-    has_web_search = any(p in q for p in web_search_phrases) or any(w in q.split() for w in ["search", "find", "latest", "google", "web"])
-    has_code_runner = any(w in q.split() for w in ["run", "execute", "script", "calculate", "compute", "eval"])
-    has_writer = any(w in q.split() for w in ["write", "draft", "summarise", "summarize", "report"])
+    has_file_reader = any(p in q for p in file_reader_phrases)
+    has_web_search = any(p in q for p in web_search_phrases) or "search the web" in q
+    has_code_runner = "run this code" in q or "run script" in q
+    has_writer = "write a report" in q or "write a doc" in q or "draft a doc" in q
     
     matched_skills = []
     if has_file_reader: matched_skills.append("file_reader")
@@ -72,15 +72,16 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
                 
             try:
                 prompt = (
-                    f"Analyze the following user query and decide if it is a task requiring a specialized subagent skill.\n"
+                    f"Analyze the following user query and decide if it is an explicit action task requiring a specialized subagent skill.\n"
                     f"User query: '{user_message}'\n\n"
                     f"Available skills:\n"
-                    f"- 'web_search': Searching the web, looking up latest info, finding details online.\n"
-                    f"- 'code_runner': Running/executing scripts, calculations, executing code blocks.\n"
-                    f"- 'writer': Writing drafts, summarising, generating reports, creative/technical writing.\n"
-                    f"- 'file_reader': Reading/opening/parsing files on disk.\n\n"
-                    f"If the query is conversational (e.g. greetings like 'hello', general chat, asking about Athena, "
-                    f"or a question that doesn't require performing a concrete task using the above skills), "
+                    f"- 'web_search': Explicit requests to search online for real-time external web facts, news, live websites.\n"
+                    f"- 'code_runner': Explicit requests to execute Python scripts, code blocks, complex computations.\n"
+                    f"- 'writer': Explicit requests to compose long-form essays, drafts, technical documentation reports.\n"
+                    f"- 'file_reader': Explicit requests to open and read local files on disk.\n\n"
+                    f"CRITICAL RULE: Any question asking what you know, asking about past interactions, user preferences, "
+                    f"personal details (e.g., pets, names, dogs, hobbies), general chat, or comments clarifying where information is stored "
+                    f"are NOT subagent tasks. For all conversational questions or questions testing long-term memory, "
                     f"return exactly this JSON: {{\"is_task\": false, \"skill\": null, \"task_description\": null}}\n\n"
                     f"Otherwise, return JSON in this format:\n"
                     f"{{\"is_task\": true, \"skill\": \"<one of the skills above>\", \"task_description\": \"<cleaned task description>\"}}"
