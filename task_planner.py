@@ -33,10 +33,13 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
     q = user_message.lower()
     
     file_reader_phrases = ["read file", "open file", "parse file", "load file", "view file", "read_file", "open_file"]
-    web_search_phrases = ["look up", "look-up", "search web", "web search"]
+    web_search_phrases = [
+        "look up", "look-up", "search web", "web search", "search the web",
+        "check deeper", "search deeper", "dig deeper", "find out more", "find more details", "check more"
+    ]
     
     has_file_reader = any(p in q for p in file_reader_phrases)
-    has_web_search = any(p in q for p in web_search_phrases) or "search the web" in q
+    has_web_search = any(p in q for p in web_search_phrases)
     has_code_runner = "run this code" in q or "run script" in q
     has_writer = "write a report" in q or "write a doc" in q or "draft a doc" in q
     
