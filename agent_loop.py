@@ -1,8 +1,10 @@
 import os
+import sys
 import json
 import logging
 from pathlib import Path
 import time
+from rich.console import Console
 import config
 import providers
 import retrieval
@@ -148,7 +150,6 @@ class AthenaAgent:
             self.last_subagent_gating = gate_result
             
             # Ingest approved items (synchronously in tests to avoid DB locks, otherwise in background thread)
-            import sys
             if "pytest" in sys.modules:
                 chunk_pipeline.process_memory_payload(gate_result["accepted"], [self.project_id])
             else:
@@ -213,7 +214,6 @@ class AthenaAgent:
         # 6. Handle tool calls (if any)
         if response.get("tool_calls"):
             # Indicate memory access to the user
-            from rich.console import Console
             console = Console()
             console.print("[dim]Athena is recalling memories...[/dim]", end="\r")
             
@@ -283,7 +283,6 @@ class AthenaAgent:
         )
         
         # 9. Trigger async chunk ingestion from the latest turn
-        import threading
         def run_ingestion_thread():
             try:
                 turn_messages = [
