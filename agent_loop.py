@@ -159,12 +159,33 @@ class AthenaAgent:
                     daemon=True
                 ).start()
             
-            # Store user message and worker result in history
+            # Phase 2: Synthesize raw subagent result using LLM if execution succeeded
+            final_output = result.user_output
+            if result.aal_summary.get("outcome") == "success" and result.user_output:
+                try:
+                    style_instruction = "Respond exclusively in sparse Caveman style." if self.caveman_mode else "Respond naturally, clearly, and concisely."
+                    synth_messages = [
+                        {
+                            "role": "system", 
+                            "content": f"You are Athena. Synthesize raw tool/skill execution data into a clear, direct, and intelligent answer for the user addressing their exact query. Do NOT output raw search blocks or repeating lists of snippets. {style_instruction}"
+                        },
+                        {
+                            "role": "user", 
+                            "content": f"User query: '{user_message}'\n\nRaw Skill Output:\n{result.user_output}"
+                        }
+                    ]
+                    synth_resp = self._call_llm_with_tools(messages=synth_messages)
+                    if synth_resp.get("content"):
+                        final_output = synth_resp["content"]
+                except Exception as synth_exc:
+                    logger.warning("Failed to synthesize subagent output via LLM: %s", synth_exc)
+
+            # Store user message and synthesized result in history
             self.history.append({"role": "user", "content": user_message})
-            self.history.append({"role": "assistant", "content": result.user_output})
+            self.history.append({"role": "assistant", "content": final_output})
             self._save_history()
             
-            return result.user_output
+            return final_output
 
         # 1. Build system prompt
         if self.caveman_mode:
