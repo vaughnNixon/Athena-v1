@@ -174,7 +174,7 @@ class AthenaAgent:
                             "content": f"User query: '{user_message}'\n\nRaw Skill Output:\n{result.user_output}"
                         }
                     ]
-                    synth_resp = self._call_llm_with_tools(messages=synth_messages)
+                    synth_resp = self._call_llm_with_tools(messages=synth_messages, enable_tools=False)
                     if synth_resp.get("content"):
                         final_output = synth_resp["content"]
                 except Exception as synth_exc:
@@ -321,9 +321,9 @@ class AthenaAgent:
         
         return assistant_content
 
-    def _call_llm_with_tools(self, messages: list, model: str = None, provider: str = None) -> dict:
+    def _call_llm_with_tools(self, messages: list, model: str = None, provider: str = None, enable_tools: bool = True) -> dict:
         """
-        Execute a single LLM call with tool support.
+        Execute a single LLM call with optional tool support.
         
         Returns dict with:
         - content: str (response text, if no tool call)
@@ -360,18 +360,26 @@ class AthenaAgent:
             logger.info("Executing LLM call: Provider=%s, Model=%s", provider, model)
             
             try:
-                tools = [get_retrieve_memories_tool_definition()]
                 active_key = getattr(client, "key", None)
                 
                 try:
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=cleaned_messages,
-                        tools=tools,
-                        tool_choice="auto",
-                        temperature=0.2
-                    )
-                    use_tools = True
+                    if enable_tools:
+                        tools = [get_retrieve_memories_tool_definition()]
+                        response = client.chat.completions.create(
+                            model=model,
+                            messages=cleaned_messages,
+                            tools=tools,
+                            tool_choice="auto",
+                            temperature=0.2
+                        )
+                        use_tools = True
+                    else:
+                        response = client.chat.completions.create(
+                            model=model,
+                            messages=cleaned_messages,
+                            temperature=0.2
+                        )
+                        use_tools = False
                 except Exception as tool_exc:
                     tool_exc_str = str(tool_exc).lower()
                     if any(term in tool_exc_str for term in ["tool", "function", "unsupported", "400"]):
