@@ -632,17 +632,18 @@ def run_chat_loop(project_id: str, session_id: str):
                 continue
 
 
-            # Process turn
-            console.print("[dim]Athena is thinking...[/dim]", end="\r")
-            response = agent.run_one_turn(stripped_input)
+            # Process turn with graceful Ctrl+C interrupt handler
+            console.print("[dim]Athena is thinking... (Press Ctrl+C to stop)[/dim]", end="\r")
+            try:
+                response = agent.run_one_turn(stripped_input)
+                console.print("\n[bold gold3]Athena[/bold gold3]")
+                console.print(response)
+            except KeyboardInterrupt:
+                console.print("\n[bold yellow]^C Generation interrupted by user.[/bold yellow]\n")
+                continue
 
-
-            
-            console.print("\n[bold gold3]Athena[/bold gold3]")
-            console.print(response)
-            
         except KeyboardInterrupt:
-            console.print("\n[bold red]Interrupt received. Exiting.[/bold red]\n")
+            console.print("\n[bold red]Session interrupted. Exiting Athena. Goodbye.[/bold red]\n")
             break
         except Exception as exc:
             console.print(f"\n[bold red]Error during conversation: {exc}[/bold red]")
