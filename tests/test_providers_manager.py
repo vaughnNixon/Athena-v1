@@ -199,7 +199,7 @@ def test_onboarding_menu_driven_wizard():
         "key2",       # Add key2
         "",           # Finish keys (blank entry)
         "3",          # Sub-menu Select Back to main menu
-        "5"           # Main menu Select Exit Setup Wizard
+        "6"           # Main menu Select Exit Setup Wizard
     ]
     
     with patch("rich.prompt.Prompt.ask", side_effect=prompt_responses):
@@ -219,7 +219,7 @@ def test_onboarding_menu_driven_wizard():
         "key3",       # Append key3
         "",           # Finish keys (blank entry)
         "3",          # Sub-menu Select Back to main menu
-        "5"           # Main menu Select Exit Setup Wizard
+        "6"           # Main menu Select Exit Setup Wizard
     ]
     
     with patch("rich.prompt.Prompt.ask", side_effect=prompt_responses_2):
@@ -228,4 +228,23 @@ def test_onboarding_menu_driven_wizard():
     mgr.load_providers()
     grok_p = mgr.providers["grok"]
     assert grok_p.api_keys == ["key1", "key2", "key3"]
+
+def test_search_provider_onboarding_wizard():
+    from main import run_onboarding
+    from service_providers_manager import get_service_manager
+    sm = get_service_manager()
+    
+    prompt_responses = [
+        "4",          # Configure Search Keys
+        "1",          # Select Tavily Search
+        "tvly-test",  # API Key
+        "6"           # Exit Setup Wizard
+    ]
+    with patch("rich.prompt.Prompt.ask", side_effect=prompt_responses):
+        run_onboarding()
+        
+    sm.load_providers()
+    tavily = sm.providers.get("tavily-search")
+    assert tavily is not None
+    assert "tvly-test" in tavily.api_keys
 

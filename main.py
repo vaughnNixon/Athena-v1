@@ -39,12 +39,13 @@ def run_onboarding():
         console.print("  [bold cyan]1[/bold cyan]: Configure Gemini Keys")
         console.print("  [bold cyan]2[/bold cyan]: Configure OpenAI-compatible Keys")
         console.print("  [bold cyan]3[/bold cyan]: Log in to GitHub Copilot (Keyless)")
-        console.print("  [bold cyan]4[/bold cyan]: Select active default provider")
-        console.print("  [bold cyan]5[/bold cyan]: Exit Setup Wizard")
+        console.print("  [bold cyan]4[/bold cyan]: Configure Search & Service Keys (Tavily, Brave, etc.)")
+        console.print("  [bold cyan]5[/bold cyan]: Select active default provider")
+        console.print("  [bold cyan]6[/bold cyan]: Exit Setup Wizard")
         
-        choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5"], default="5")
+        choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5", "6"], default="6")
         
-        if choice == "5":
+        if choice == "6":
             console.print("\n[bold red]Exiting Setup Wizard.[/bold red]\n")
             break
             
@@ -66,6 +67,34 @@ def run_onboarding():
                 console.print("\n[bold red][FAIL] GitHub Copilot login failed or timed out.[/bold red]\n")
                 
         elif choice == "4":
+            from service_providers_manager import get_service_manager
+            sm = get_service_manager()
+            console.print("\n[bold gold3]Configure Search & Service Provider Keys[/bold gold3]")
+            search_providers = [p for p in sm.providers.values() if p.category == "search"]
+            choices = []
+            for i, p in enumerate(search_providers, start=1):
+                idx_str = str(i)
+                choices.append(idx_str)
+                keys_count = len(p.api_keys)
+                console.print(f"  [bold cyan]{idx_str}[/bold cyan]: {p.name} ({keys_count} keys configured)")
+            back_idx = str(len(search_providers) + 1)
+            choices.append(back_idx)
+            console.print(f"  [bold cyan]{back_idx}[/bold cyan]: Back to main menu")
+            
+            sel = Prompt.ask("Choose search provider to configure", choices=choices, default=back_idx)
+            if sel != back_idx:
+                selected_p = search_providers[int(sel) - 1]
+                key_in = Prompt.ask(f"Enter API key for {selected_p.name}", password=True).strip()
+                if key_in:
+                    if key_in not in selected_p.api_keys:
+                        selected_p.api_keys.append(key_in)
+                    selected_p.enabled = True
+                    sm.save_providers()
+                    console.print(f"[bold green]Key saved! Enabled search provider '{selected_p.name}'.[/bold green]\n")
+                else:
+                    console.print("[yellow]No key entered. Unchanged.[/yellow]\n")
+
+        elif choice == "5":
             console.print("\n[bold gold3]Select Active Default Provider[/bold gold3]")
             active_choices = ["auto"]
             for pid, p in mgr.providers.items():
