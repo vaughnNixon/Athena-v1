@@ -163,16 +163,21 @@ class AthenaAgent:
             final_output = result.user_output
             if result.aal_summary.get("outcome") == "success" and result.user_output:
                 try:
-                    style_instruction = "Respond exclusively in sparse Caveman style." if self.caveman_mode else "Respond naturally, clearly, and concisely."
+                    if self.caveman_mode:
+                        system_instructions = (
+                            "You are Athena. Extract the exact core answer from the tool execution data. "
+                            "Respond exclusively in ultra-terse telegraphic caveman style (e.g. 'Anthropic new models Mythos, Fable.'). "
+                            "Do NOT output generic acknowledgments like 'ACK' or raw search blocks."
+                        )
+                    else:
+                        system_instructions = (
+                            "You are Athena. Synthesize the raw tool execution data into a clear, natural, and comprehensive answer "
+                            "directly addressing the user's query (e.g. 'Based on recent news, Anthropic's latest models are Mythos and Fable...'). "
+                            "Do NOT output raw search blocks or repeating lists of snippets."
+                        )
                     synth_messages = [
-                        {
-                            "role": "system", 
-                            "content": f"You are Athena. Synthesize raw tool/skill execution data into a clear, direct, and intelligent answer for the user addressing their exact query. Do NOT output raw search blocks or repeating lists of snippets. {style_instruction}"
-                        },
-                        {
-                            "role": "user", 
-                            "content": f"User query: '{user_message}'\n\nRaw Skill Output:\n{result.user_output}"
-                        }
+                        {"role": "system", "content": system_instructions},
+                        {"role": "user", "content": f"User query: '{user_message}'\n\nRaw Skill Output:\n{result.user_output}"}
                     ]
                     synth_resp = self._call_llm_with_tools(messages=synth_messages, enable_tools=False)
                     if synth_resp.get("content"):
