@@ -264,13 +264,12 @@ class ProvidersManager:
         if not candidates:
             return None
 
-        # Check if overridden active provider is healthy
+        # Check if overridden active provider is healthy (Circuit Breaker: consecutive_failures must be < 2)
         if self.active_provider_id and self.active_provider_id not in skip_providers:
             active_p = self.providers.get(self.active_provider_id)
-            if active_p and active_p.enabled:
+            if active_p and active_p.enabled and active_p.stats.get("consecutive_failures", 0) < 2:
                 if active_p.type == "github_copilot":
-                    if active_p.stats.get("consecutive_failures", 0) < 3:
-                        return active_p
+                    return active_p
                 else:
                     if any(stats["failures"] < 3 for stats in active_p.key_stats.values()) or not active_p.api_keys:
                         return active_p

@@ -43,6 +43,7 @@ def get_client_for_provider(provider_id: str, key: str = None) -> tuple:
     if mgr.active_model_override and mgr.active_provider_id == provider_id:
         model = mgr.active_model_override
         
+    # Enforce strict 5.0 second network timeout to prevent hung API calls
     if p.type == "github_copilot":
         raw_token, token_src = copilot_auth.resolve_copilot_token()
         if not raw_token:
@@ -52,7 +53,8 @@ def get_client_for_provider(provider_id: str, key: str = None) -> tuple:
         client = openai.OpenAI(
             api_key=api_token,
             base_url="https://api.githubcopilot.com",
-            default_headers=default_headers
+            default_headers=default_headers,
+            timeout=5.0
         )
         return client, model
         
@@ -60,14 +62,16 @@ def get_client_for_provider(provider_id: str, key: str = None) -> tuple:
         base_url = p.base_url or "https://generativelanguage.googleapis.com/v1beta/openai/"
         client = openai.OpenAI(
             api_key=key or "",
-            base_url=base_url
+            base_url=base_url,
+            timeout=5.0
         )
         return client, model
         
     elif p.type == "openai_compatible":
         client = openai.OpenAI(
             api_key=key or "",
-            base_url=p.base_url
+            base_url=p.base_url,
+            timeout=5.0
         )
         return client, model
         
@@ -87,7 +91,6 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
     
     mapped_skips = [map_legacy_provider_id(s) for s in skip_providers]
     
-    # Check if there are any configured providers at all
     configured = [p for p in mgr.providers.values() if p.enabled and (p.api_keys or p.type == "github_copilot")]
     if not configured:
         raise ValueError("No providers are configured. Please run 'athena onboard' to add credentials.")
@@ -95,7 +98,6 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
     reset_attempted = False
     
     while True:
-        # Check what providers are actually available (enabled and not skipped)
         available = [p.id for p in mgr.providers.values() if p.enabled and p.id not in mapped_skips and (p.api_keys or p.type == "github_copilot")]
         
         if not available:
@@ -126,7 +128,6 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
         else:
             key = mgr.get_active_key(p.id, skip_keys=skip_keys.get(p.id))
             if not key:
-                # No keys left for this provider in this run, skip the provider and retry
                 mapped_skips.append(p.id)
                 continue
                 
@@ -147,7 +148,6 @@ def get_routing_client(skip_providers: list = None, skip_keys: dict = None) -> t
             else:
                 mapped_skips.append(p.id)
                 mgr.record_key_failure(p.id, None, exc)
-
 
 def record_success(provider_name: str):
     from providers_manager import get_manager
