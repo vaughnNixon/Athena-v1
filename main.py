@@ -499,7 +499,6 @@ def run_chat_loop(project_id: str, session_id: str):
 
             if cmd_lower == "/trace":
                 from rich.table import Table
-                from rich.panel import Panel
                 tr = getattr(agent, "last_retrieval_trace", None)
                 if tr is None:
                     console.print("[dim]No retrieval trace available yet. Ask a question first.[/dim]")
@@ -568,7 +567,6 @@ def run_chat_loop(project_id: str, session_id: str):
 
             if cmd_lower == "/subagent":
                 from rich.table import Table
-                from rich.panel import Panel
                 
                 result = getattr(agent, "last_subagent_result", None)
                 gating = getattr(agent, "last_subagent_gating", None)
