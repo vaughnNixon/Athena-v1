@@ -1,6 +1,6 @@
-# Athena v1.2 — Long-Term Memory Dialogue Agent with Subagent System
+# Athena v1.3 — Dialogue Agent with Standardized Skill Framework & Multi-Service Providers
 
-Athena is an intelligent, memory-first dialogue agent designed to run across multiple inference providers while maintaining persistent long-term memory, context window compression, and a fully extensible subagent execution layer with centralised memory gating.
+Athena is an intelligent, memory-first dialogue agent designed to run across multiple inference providers while maintaining persistent long-term memory, context window compression, a multi-service provider management architecture, and a standardized skill framework with fine-grained security policies.
 
 ---
 
@@ -8,25 +8,25 @@ Athena is an intelligent, memory-first dialogue agent designed to run across mul
 
 Athena has two parallel execution paths in `run_one_turn()`:
 
-### Path A — Subagent Task Execution
-For tasks that require a specialised skill (web search, code execution, writing, file reading), Athena routes through the subagent system before any conversational LLM call.
+### Path A — Subagent Task Execution (Managed Skill Framework)
+For tasks requiring specialised capabilities (web search, code execution, writing, file reading, etc.), Athena routes through the Task Planner to resolve namespaced capabilities before executing inside a sandboxed `SkillContext`.
 
 ```
 User Message
     ↓
-Task Planner  ← queries Athena's memory for prior context first
+Task Planner  ← queries memory & resolves namespaced capability (e.g., "search.web")
     ↓
-Determine Skill (Stage A: deterministic rules / Stage B: LLM fallback)
+Capability Registry  ← matches capability to registered Skill
     ↓
-Spawn Generic Stateless Worker
+Skill Policy Engine  ← validates permissions (network.http, storage.artifacts)
     ↓
-Worker loads Skill → executes task
+Worker Container  ← injects SkillContext & manages lifecycle (on_initialize -> run -> on_teardown)
     ↓
-SubagentResult { user_output, aal_summary, memory_payload, artifacts }
+Skill Execution  ← utilizes ServiceProvidersManager & SearchCache
     ↓
-Memory Gating  ← filters on outcome, confidence, length, deduplication
+SubagentResult { user_output, aal_summary, memory_payload: [], artifacts }
     ↓
-chunk_pipeline.process_memory_payload()  ← approved items only
+Memory Gate  ← inspects artifacts & handoff summary before storing
     ↓
 Long-Term Memory (SQLite Chunks)
 ```
@@ -56,7 +56,7 @@ graph TD
 
 ## ── Running Tests ──
 
-To run the entire hermetic test suite (**78 tests**) inside the virtual environment:
+To run the entire hermetic test suite (**84 tests**) inside the virtual environment:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest
@@ -64,60 +64,31 @@ To run the entire hermetic test suite (**78 tests**) inside the virtual environm
 
 ---
 
-## ── Core Features ──
+## ── Core Features (v1.3) ──
 
-### 1. Subagent Execution System (v1.2)
+### 1. Standardized Skill Framework (`skills/`)
+- **`SkillManifest`**: Standardized metadata contract defining `name`, `version`, `athena_api`, `capabilities`, `permissions`, and `dependencies`.
+- **`SkillContext` Dependency Injection**: Provides skills with clean access to `task_id`, `artifacts_dir`, `services` (`ServiceProvidersManager`), `llm_router`, `memory_reader`, and logging without global coupling.
+- **Skill Lifecycle Hooks**: Formal hooks for resource management: `on_initialize(ctx)`, `run(ctx, task)`, and `on_teardown(ctx)`.
+- **`SkillPolicyEngine`**: Security guardrails enforcing granular permissions (`permission.network.http`, `permission.filesystem.write`, `permission.storage.artifacts`, `permission.shell.execute`) prior to execution.
+- **Runtime Skill Loader**: Scans directories and dynamically verifies, validates, and registers skills into the `CapabilityRegistry`.
 
-- **SubagentResult Contract**: Every skill must return a 4-part structured object — `user_output` (what the user sees), `aal_summary` (execution handoff dict with outcome/confidence/notes), `memory_payload` (knowledge for long-term storage), and `artifacts` (files, reports, CSVs on disk).
-- **Task Planner (`task_planner.py`)**: Queries Athena's memory for prior context first, then maps user messages to skills using deterministic keyword rules (Stage A) or an LLM call (Stage B). Returns `None` for conversational turns so they bypass the subagent path entirely.
-- **Generic Stateless Worker (`worker.py`)**: A crash-proof execution container that loads registered skills dynamically. Converts unhandled exceptions into structured failure results instead of crashing.
-- **Versioned Skill Registry (`skills/`)**: Each skill must declare a `name`, `version`, and `athena_api` integer. Skills with `athena_api != ATHENA_API_VERSION` are rejected at registration time with a clear `IncompatibleSkillError`, not at execution time.
-- **Memory Gating (`memory_gating.py`)**: Athena's filter layer between worker output and long-term storage:
-  - Rejects the entire payload if `outcome == "failed"` or `confidence < 0.3`
-  - Drops empty strings and items shorter than 20 characters
-  - Deduplicates against existing database facts (SHA-256 hash check) and chunks (text match)
-  - Only accepted items enter `chunk_pipeline.process_memory_payload()`
+### 2. Multi-Service Provider Manager (`service_providers_manager.py`)
+- **Multi-Category Management**: Manages providers partitioned across service categories (`search`, `llm`, `image`, `embedding`, `ocr`, `maps`, `storage`, `email`).
+- **Dynamic Multi-Factor Selection**: Scores provider health dynamically based on health score ($0.4$), historical success rate ($0.3$), average latency ($0.3$), and static priority tie-breaking.
+- **Key Rotation & Failover**: Automatic key rotation and provider failover on transient outages.
 
-### 2. Universal Provider Manager with Multi-Key Rotation
+### 3. Web Search Skill & Provider Adapters (`skills/web_search/`)
+- **Namespaced Capabilities**: Supports `search.web`, `search.news`, `search.image`, `search.code`, `search.maps`, `search.academic`, `search.documentation`.
+- **Multi-Provider Adapters**: Out-of-the-box adapters for **Tavily**, **Brave Search**, **Serper**, **Exa**, and **SearXNG** (self-hosted keyless).
+- **Search Cache (`search_cache.py`)**: SHA-256 query hashing with configurable TTL to eliminate redundant API quota usage.
+- **Artifact-First Outputs**: Generates structured `search_results.json`, `citations.json`, and `raw_provider_response.json` artifacts, setting `memory_payload = []` to delegate memory ingestion cleanly to downstream gating.
 
-- **Schema & Persistence (`providers.json`)**: Supports registering custom OpenAI-compatible endpoints without hardcoding.
-- **API Key Rotation**: Rotates to the next API key per provider on any failure.
-- **Auto-Failover**: Switches to the next healthiest provider when all keys for one provider are exhausted.
-- **Health Tracking & Self-Healing**: Tracks request stats per key, automatically resets on full failure to avoid permanent lockouts.
-
-### 3. Next-Generation Chunk Memory Architecture
-
-- **Intelligent Chunk Generation**: Segments conversations into chronological chunks. LLM enriches them with Caveman summaries, keywords, themes, and entities. Falls back to deterministic local extraction when all providers are offline.
-- **Active/Passive Lifecycle Sweep**: Enforces a configurable `active_token_budget` (default `50,000` tokens). Demotes older chunks to `passive` tier chronologically. Annotates budget-boundary chunks as `mixed`.
-- **Staged Retrieval Engine**:
-  - **Stage 0** — Intent Classifier (rules-based whole-word matching)
-  - **Stage 1 & 2** — Active & Passive keyword overlap search (sub-millisecond indexed)
-  - **Stage 3** — Semantic cosine similarity search with cached `chunk_embeddings` table
-  - **Stage 4 & 5** — Desperation mode + non-hallucinatory safe fallback
-
-### 4. Adaptive Learning Engine
-
-- Detects user corrections and routes through the learning pipeline.
-- Two-stage chunk selection: deterministic Stage A ranking first, LLM arbitration (Stage B) for ambiguous cases.
-- Applies skip mark penalties to penalise bad retrieval chunks and rewards useful ones.
-- Maintains per-intent accuracy statistics and auto-adjusts retrieval thresholds for low-accuracy query types.
-
-### 5. Context Compression & Style Switcher
-
-- **Presentation Switcher (`/caveman`)**: Toggles between natural dialogue and sparse caveman prose without splitting session history.
-- **Headroom AI Compression**: Compresses long tool outputs and history using fast native token-crushers.
-
-### 6. Interactive CLI Command Shell
-
-- **Slash Commands**:
-  - `/providers` — Display all configured providers, keys, health, and routing stats
-  - `/provider add/remove/enable/disable/select` — Manage provider configuration
-  - `/model select` — Override active model
-  - `/caveman` — Toggle presentation style
-  - `/trace` — Display the full retrieval trace of the last memory query (stages, timings, chunks, skip marks)
-  - `/subagent` — Display the last subagent execution summary (task, skill, outcome, memory gating results, artifacts)
-  - `/rollback` / `/learning` — Reset or inspect adaptive learning skip marks and accuracy stats
-  - `/quit` / `/exit` — Clean session exit
+### 4. Next-Generation Chunk Memory & Adaptive Learning
+- **Intelligent Chunk Generation**: Chronological segmentation enriched with keywords, themes, and entities.
+- **Active/Passive Sweep**: Enforces a configurable active token budget (`50,000` tokens).
+- **5-Stage Staged Retrieval**: Intent classifier -> Active/Passive keyword overlap -> Cosine similarity -> Desperation -> Fallback.
+- **Adaptive Learning Engine**: Applies skip mark penalties and rewards based on user corrections.
 
 ---
 
@@ -145,35 +116,49 @@ To run the entire hermetic test suite (**78 tests**) inside the virtual environm
 
 ---
 
-## ── Skill Development ──
+## ── Skill Development Guide (v1.3 Contract) ──
 
-To add a skill, create a class that extends `BaseSkill` in the `skills/` directory:
+To add a new skill to Athena, inherit from `BaseSkill` and define a `SkillManifest`:
 
 ```python
-from skills.base_skill import BaseSkill
+from skills import BaseSkill, SkillManifest, SkillContext, PERM_NETWORK_HTTP, PERM_STORAGE_ARTIFACTS
 from subagent_result import SubagentResult
 
-class MySkill(BaseSkill):
-    name = "my_skill"
-    version = "1.0"
-    athena_api = 1          # Must match ATHENA_API_VERSION = 1
-    description = "Does something useful"
+class MyCustomSkill(BaseSkill):
+    def __init__(self):
+        manifest = SkillManifest(
+            name="my_custom_skill",
+            version="1.0.0",
+            athena_api=1,
+            description="Performs automated analytical tasks.",
+            capabilities=["analytics.process"],
+            permissions=[PERM_NETWORK_HTTP, PERM_STORAGE_ARTIFACTS]
+        )
+        super().__init__(manifest=manifest)
 
-    def run(self, task: str, memory_context: str) -> SubagentResult:
-        # ... do the work ...
+    def on_initialize(self, ctx: SkillContext) -> None:
+        ctx.logger.info("Initializing custom skill workspace...")
+
+    def run(self, ctx: SkillContext, task: str) -> SubagentResult:
+        ctx.logger.info(f"Executing task: {task}")
+        
+        # Access injected services safely
+        # manager = ctx.services
+        # artifacts_path = ctx.artifacts_dir / "output.json"
+
         return SubagentResult(
-            user_output="Done.",
-            aal_summary={"task": task, "skill_used": self.name, "outcome": "success", "confidence": 0.95, "notes": ""},
-            memory_payload=["key observation about this task"],
+            user_output="Task processed successfully.",
+            aal_summary={"task": task, "skill_used": self.manifest.name, "outcome": "success", "confidence": 1.0},
+            memory_payload=[],
             artifacts=[]
         )
+
+    def on_teardown(self, ctx: SkillContext) -> None:
+        ctx.logger.info("Cleaning up resources...")
 ```
 
-Then register it:
+Register the skill:
 ```python
 import skills
-from my_skill_module import MySkill
-skills.register(MySkill())
+skills.register(MyCustomSkill())
 ```
-
-Skills with a mismatched `athena_api` version are rejected at registration with a clear error — they will never silently fail at execution time.
