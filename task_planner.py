@@ -6,7 +6,7 @@ from retrieval import retrieve_memories_staged
 logger = logging.getLogger("athena.task_planner")
 
 def plan(user_message: str, project_id: str = None) -> dict | None:
-    """Queries Athena's memory for relevant past context, determines the skill,
+    """Queries Athena's memory for relevant past context, determines the skill and capability,
     and returns a structured plan dict or None if the query is conversational.
     """
     # 1. Query memory first
@@ -29,10 +29,9 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
                 prior_outcome = "partial"
                 break
 
-    # 2. Determine skill (Stage A: Deterministic Rules)
+    # 2. Determine skill and namespaced capability (Stage A: Deterministic Rules)
     q = user_message.lower()
     
-    # Phrase and keyword checks
     file_reader_phrases = ["read file", "open file", "parse file", "load file", "view file", "read_file", "open_file"]
     web_search_phrases = ["look up", "look-up", "search web", "web search"]
     
@@ -48,6 +47,7 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
     if has_writer: matched_skills.append("writer")
     
     skill = None
+    capability = None
     task_desc = user_message
     
     if len(matched_skills) == 1:
@@ -115,7 +115,6 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
                     skip_providers.append(provider)
         
         if not llm_success:
-            # Fallback: if multiple categories matched deterministically, choose the first
             if len(matched_skills) > 1:
                 skill = matched_skills[0]
             else:
@@ -123,9 +122,23 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
 
     if not skill:
         return None
-        
+
+    # Resolve capability namespace if skill is web_search
+    if skill == "web_search":
+        if any(w in q for w in ["news", "headline", "latest", "today", "breaking"]):
+            capability = "search.news"
+        elif any(w in q for w in ["image", "photo", "picture", "logo"]):
+            capability = "search.image"
+        elif any(w in q for w in ["code", "repo", "github"]):
+            capability = "search.code"
+        elif any(w in q for w in ["map", "location", "near me"]):
+            capability = "search.maps"
+        else:
+            capability = "search.web"
+
     return {
         "skill": skill,
+        "capability": capability,
         "task_description": task_desc,
         "memory_context": memory_context,
         "prior_outcome": prior_outcome

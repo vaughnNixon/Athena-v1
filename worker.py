@@ -1,12 +1,16 @@
 import logging
+import inspect
 import skills
 from subagent_result import SubagentResult
 
 logger = logging.getLogger("athena.worker")
 
 def load_skill(skill_name: str):
-    """Loads a skill from the central registry."""
-    return skills.get(skill_name)
+    """Loads a skill from the central registry by name or capability."""
+    s = skills.get(skill_name)
+    if not s:
+        s = skills.get_by_capability(skill_name)
+    return s
 
 def execute(plan: dict) -> SubagentResult:
     """Executes the loaded skill according to the plan.
@@ -15,6 +19,7 @@ def execute(plan: dict) -> SubagentResult:
     gracefully structured SubagentResult with outcome='failed'.
     """
     skill_name = plan.get("skill")
+    capability = plan.get("capability")
     task_desc = plan.get("task_description", "")
     memory_ctx = plan.get("memory_context", "")
 
@@ -35,18 +40,14 @@ def execute(plan: dict) -> SubagentResult:
         )
     
     try:
-        if hasattr(skill_obj, "run") and callable(skill_obj.run):
-            return skill_obj.run(
-                task=task_desc,
-                memory_context=memory_ctx
-            )
-        elif callable(skill_obj):
-            return skill_obj(
-                task=task_desc,
-                memory_context=memory_ctx
-            )
-        else:
-            raise TypeError("Loaded skill must implement run() or be callable.")
+        kwargs = {"task": task_desc, "memory_context": memory_ctx}
+        target_func = skill_obj.run if hasattr(skill_obj, "run") and callable(skill_obj.run) else skill_obj
+        
+        sig = inspect.signature(target_func)
+        if "capability" in sig.parameters and capability:
+            kwargs["capability"] = capability
+
+        return target_func(**kwargs)
     except Exception as exc:
         logger.exception("Exception occurred during execution of skill '%s': %s", skill_name, exc)
         return SubagentResult(
