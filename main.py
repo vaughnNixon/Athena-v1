@@ -749,6 +749,7 @@ def main():
     parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep", "rollback"], help="Command to run")
     parser.add_argument("--project", default="default", help="Project namespace scope (default: default)")
     parser.add_argument("--session", default="session_1", help="Session ID (default: session_1)")
+    parser.add_argument("--no-tui", action="store_true", help="Use legacy plain-text chat loop instead of TUI")
     parser.add_argument("--lines", type=int, default=40, help="Number of log lines to show (default: 40)")
     parser.add_argument("--provider", help="Active model provider to use (switches default in config)")
     parser.add_argument("--skip", action="store_true", help="Reset skip marks (learning engine)")
@@ -814,7 +815,15 @@ def main():
             learning_engine.reset_query_statistics()
             console.print("[bold green][OK] Query statistics reset completed.[/bold green]")
     elif args.command == "chat":
-        run_chat_loop(args.project, args.session)
+        if getattr(args, "no_tui", False):
+            run_chat_loop(args.project, args.session)
+        else:
+            try:
+                from tui import run as tui_run
+                tui_run(project_id=args.project, session_id=args.session)
+            except ImportError:
+                console.print("[yellow]textual not installed, falling back to legacy shell.[/yellow]")
+                run_chat_loop(args.project, args.session)
 
 if __name__ == "__main__":
     main()
