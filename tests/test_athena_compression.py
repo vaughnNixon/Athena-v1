@@ -44,7 +44,7 @@ def test_compress_history_via_headroom_real():
     import json
     messages = [
         {"role": "user", "content": "hello"},
-        {"role": "tool", "content": json.dumps([{"key": "val", "index": i} for i in range(100)])}, # long tool JSON array
+        {"role": "tool", "content": json.dumps([{"key": "val", "index": i} for i in range(150)])}, # long tool JSON array
         {"role": "assistant", "content": "response"}
     ]
     

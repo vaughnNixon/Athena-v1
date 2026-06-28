@@ -32,10 +32,9 @@ def compress_history_via_headroom(messages: list) -> list:
     """Wrapper that leverages headroom-ai for dynamic RAG and tool output compaction."""
     if _HEADROOM_AVAILABLE:
         try:
-            # Skip ML compression (kompress_model="disabled") to avoid HuggingFace model downloads,
-            # and extract the messages list from the returned CompressResult object.
             res = headroom_compress(messages, kompress_model="disabled")
-            return res.messages
+            if res.messages != messages:
+                return res.messages
         except Exception as exc:
             logger.error("headroom-ai compression failed: %s. Falling back.", exc)
             

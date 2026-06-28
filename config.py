@@ -29,6 +29,21 @@ memory:
   compression:
     caveman_threshold_tokens: 1000
     headroom_max_injection_tokens: 500
+session_continuity:
+  enabled: true
+  idle_trigger_minutes: 60
+  provider_pressure_threshold: 0.80
+  context_pressure_warn: 0.85
+  context_pressure_new_chat: 0.95
+  session_ttl_hours: 24
+  archive_retention_hours: 72
+  topic_decay_interval_minutes: 5
+  topic_dormant_threshold: 0.40
+  topic_inactive_threshold: 0.15
+maintenance_provider:
+  enabled: false
+  provider: ""
+  model: ""
 providers:
   gemini:
     api_key: ""
@@ -57,6 +72,7 @@ def ensure_athena_dirs():
     home = get_athena_home()
     (home / "knowledge").mkdir(parents=True, exist_ok=True)
     (home / "skills" / "caveman").mkdir(parents=True, exist_ok=True)
+    (home / "sessions").mkdir(parents=True, exist_ok=True)
     (home / "logs").mkdir(parents=True, exist_ok=True)
     
     config_file = home / "config.yaml"

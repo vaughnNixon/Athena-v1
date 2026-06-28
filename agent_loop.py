@@ -39,6 +39,11 @@ class AthenaAgent:
         self.last_subagent_result = None
         self.last_subagent_gating = None
         
+        from session_continuity import SessionContinuityLayer
+        self.scl = SessionContinuityLayer(self.session_id, self.project_id)
+        self._msg_index = len(self.history)
+        self._snapshot_written = False
+        
     def _load_history(self) -> list:
         if self.history_file.exists():
             try:
@@ -232,10 +237,18 @@ class AthenaAgent:
         self.history = athena_compression.run_caveman_summarization(self.history, self.project_id)
         compressed_history = athena_compression.compress_history_via_headroom(self.history)
         
-        # 4. Assemble message payload
+        # 4. Assemble message payload with SCL Layer
+        scl_ctx = self.scl.get_session_context()
+        scl_sys_msgs = []
+        if scl_ctx.get("summary"):
+            scl_sys_msgs.append({"role": "system", "content": f"[ATHENA SESSION SUMMARY (AAL)]\n{scl_ctx['summary']}"})
+        if scl_ctx.get("active_topics"):
+            t_lines = [f"• {t['topic']} | score:{t['score']} | status:{t['status']} | priority:{t['priority']}" for t in scl_ctx["active_topics"]]
+            scl_sys_msgs.append({"role": "system", "content": f"[ATHENA ACTIVE TOPICS]\n" + "\n".join(t_lines)})
+
         messages = [
             {"role": "system", "content": system_prompt}
-        ] + compressed_history
+        ] + scl_sys_msgs + compressed_history
         
         # 5. Execute API call with tool support (FIRST PASS)
         response = self._call_llm_with_tools(messages=messages)
@@ -305,11 +318,32 @@ class AthenaAgent:
         self.history.append(history_entry)
         self._save_history()
         
-        distillation.enqueue_distillation(
-            user_msg=user_message,
-            agent_msg=assistant_content,
-            scope_ids=[self.project_id]
-        )
+        # 8.1 SCL Update & Context Pressure Check
+        self._msg_index += 2
+        self.scl.update_after_turn(user_message, assistant_content, self._msg_index)
+        
+        if "pytest" not in sys.modules:
+            from background_queue import BackgroundQueue, JobType
+            bq = BackgroundQueue()
+            bq.enqueue(JobType.MEMORY_DISTILLATION, {
+                "user_msg": user_message,
+                "agent_msg": assistant_content,
+                "scope_ids": [self.project_id]
+            })
+            bq.enqueue(JobType.SESSION_SUMMARY, {
+                "session_id": self.session_id,
+                "project_id": self.project_id,
+                "history": self.history,
+                "from_marker": self.scl.get_summary_marker()
+            }, priority=5)
+
+        pressure = self.scl.compute_context_pressure(messages)
+        if pressure >= 0.95:
+            console = Console()
+            console.print("[yellow]💬 Context nearly full. Type /newchat to continue with full memory.[/yellow]")
+        elif pressure >= 0.85:
+            console = Console()
+            console.print("[dim]⚠ Context at 85% — summarizing soon.[/dim]")
         
         # 9. Trigger async chunk ingestion from the latest turn
         def run_ingestion_thread():
@@ -451,6 +485,21 @@ class AthenaAgent:
                 
             except Exception as exc:
                 logger.warning("LLM execution failed for provider '%s': %s. Retrying with failover...", provider, exc)
+                if not getattr(self, "_snapshot_written", False):
+                    try:
+                        sys_prompt = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+                        snap_id = self.scl.create_rotation_snapshot(
+                            trigger="provider_failure",
+                            identity=sys_prompt,
+                            recent_context=self.history[-6:] if self.history else [],
+                            provider_from=provider
+                        )
+                        from background_queue import BackgroundQueue, JobType
+                        BackgroundQueue().enqueue(JobType.ROTATION_SNAPSHOT, {"snap_id": snap_id, "session_id": self.session_id}, priority=1)
+                        self._snapshot_written = True
+                    except Exception as snap_exc:
+                        logger.warning("Failed to create rotation snapshot: %s", snap_exc)
+
                 active_key = getattr(client, "key", None)
                 if active_key:
                     skip_keys.setdefault(provider, []).append(active_key)

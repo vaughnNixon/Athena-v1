@@ -491,6 +491,58 @@ def run_chat_loop(project_id: str, session_id: str):
                 learning_engine.reset_query_statistics()
                 console.print("[bold green]Successfully reset all retrieval skip marks and query category statistics.[/bold green]")
                 continue
+
+            if cmd_lower == "/topics":
+                from rich.table import Table
+                topics = agent.scl.get_active_topics(top_n=10)
+                if not topics:
+                    console.print("[dim]No active topics being tracked.[/dim]")
+                else:
+                    t_table = Table(title="Active Session Topics", title_style="bold cyan")
+                    t_table.add_column("Topic", style="white")
+                    t_table.add_column("Score", justify="right", style="green")
+                    t_table.add_column("Status", style="yellow")
+                    t_table.add_column("Priority", style="magenta")
+                    t_table.add_column("Mentions", justify="right", style="cyan")
+                    for t in topics:
+                        t_table.add_row(t["topic"], f"{t['score']:.2f}", t["status"], t["priority"], str(t["mention_count"]))
+                    console.print(t_table)
+                continue
+
+            if cmd_lower.startswith("/pin"):
+                parts = stripped_input.split(maxsplit=1)
+                if len(parts) < 2:
+                    console.print("[red]Usage: /pin <topic_name>[/red]")
+                else:
+                    t_name = parts[1].strip()
+                    agent.scl.pin_topic(t_name)
+                    console.print(f"[bold green]Topic '{t_name}' is now PINNED.[/bold green]")
+                continue
+
+            if cmd_lower.startswith("/unpin"):
+                parts = stripped_input.split(maxsplit=1)
+                if len(parts) < 2:
+                    console.print("[red]Usage: /unpin <topic_name>[/red]")
+                else:
+                    t_name = parts[1].strip()
+                    agent.scl.unpin_topic(t_name)
+                    console.print(f"[bold green]Topic '{t_name}' unpinned (reset to NORMAL).[/bold green]")
+                continue
+
+            if cmd_lower == "/newchat":
+                handoff_data = agent.scl.export_for_new_chat()
+                agent.scl.archive_session()
+                new_session_id = f"session_{int(time.time())}"
+                console.print(f"[bold green]Session archived. Starting new chat session '{new_session_id}'...[/bold green]")
+                agent = AthenaAgent(project_id=project_id, session_id=new_session_id)
+                agent.scl._write_session(
+                    summary=handoff_data["summary"],
+                    summary_version=handoff_data["summary_version"],
+                    summary_marker=handoff_data["summary_marker"],
+                    context_pressure=0.0
+                )
+                console.print("[bold green]✓ Context carried over seamlessly into new chat.[/bold green]")
+                continue
                 
             if cmd_lower == "/learning":
                 from rich.table import Table

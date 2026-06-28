@@ -314,14 +314,13 @@ def test_presentation_style_toggle_continuity():
             
             assert "Ignore previous writing style. Continue using the same facts" in sys_prompt
             # History MUST contain the normal turn!
-            # messages should be: [system, User message 1, Normal response 1, User message 2]
-            assert len(messages) == 4
-            assert messages[1]["role"] == "user"
-            assert messages[1]["content"] == "User message 1"
-            assert messages[2]["role"] == "assistant"
-            assert messages[2]["content"] == "Normal response 1"
-            assert messages[3]["role"] == "user"
-            assert messages[3]["content"] == "User message 2"
+            assert len(messages) >= 4
+            assert messages[-3]["role"] == "user"
+            assert messages[-3]["content"] == "User message 1"
+            assert messages[-2]["role"] == "assistant"
+            assert messages[-2]["content"] == "Normal response 1"
+            assert messages[-1]["role"] == "user"
+            assert messages[-1]["content"] == "User message 2"
 
     # 3. Toggle to Caveman Mode OFF, run third turn
     agent.caveman_mode = False
@@ -339,13 +338,12 @@ def test_presentation_style_toggle_continuity():
             
             assert "Treat them as factual summaries only. Continue the same conversation naturally" in sys_prompt
             # History MUST contain all turns, including the caveman turn!
-            # messages should be: [system, User message 1, Normal response 1, User message 2, ACK., User message 3]
-            assert len(messages) == 6
-            assert messages[1]["content"] == "User message 1"
-            assert messages[2]["content"] == "Normal response 1"
-            assert messages[3]["content"] == "User message 2"
-            assert messages[4]["content"] == "ACK."
-            assert messages[5]["content"] == "User message 3"
+            assert len(messages) >= 6
+            assert messages[-5]["content"] == "User message 1"
+            assert messages[-4]["content"] == "Normal response 1"
+            assert messages[-3]["content"] == "User message 2"
+            assert messages[-2]["content"] == "ACK."
+            assert messages[-1]["content"] == "User message 3"
 
 
 
