@@ -199,6 +199,7 @@ class ServiceProvidersManager:
         return best_provider
 
     def get_active_key(self, provider_id: str, skip_keys: Optional[List[str]] = None) -> Optional[str]:
+        self.load_providers()
         p = self.providers.get(provider_id)
         if not p:
             return None

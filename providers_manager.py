@@ -294,6 +294,7 @@ class ProvidersManager:
         return best_candidate
 
     def get_active_key(self, provider_id: str, skip_keys: List[str] = None) -> Optional[str]:
+        self.load_providers()
         p = self.providers.get(provider_id)
         if not p or not p.api_keys:
             return None
