@@ -93,9 +93,9 @@ class BackgroundQueue:
             m_name = cfg.get("model")
             if p_name and m_name:
                 try:
-                    client, model, prov = providers.get_routing_client()
+                    client, default_model = providers.get_client_for_provider(p_name)
                     return client, m_name, p_name
                 except Exception as exc:
-                    logger.warning("Maintenance provider failed, falling back to standard pool: %s", exc)
+                    logger.warning("Maintenance provider '%s' failed, falling back to standard pool: %s", p_name, exc)
         
         return providers.get_routing_client()
