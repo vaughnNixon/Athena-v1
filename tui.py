@@ -772,24 +772,24 @@ class ChatScreen(Widget):
 
     @work(thread=True)
     def _run_agent(self, user_input: str) -> None:
-        self.call_from_thread(self._set_thinking, True)
+        self.app.call_from_thread(self._set_thinking, True)
         try:
             response = self._app.agent.run_one_turn(user_input)
-            self.call_from_thread(self._set_thinking, False)
-            self.call_from_thread(self._emit_athena_message, response)
-            self.call_from_thread(self._refresh_status)
+            self.app.call_from_thread(self._set_thinking, False)
+            self.app.call_from_thread(self._emit_athena_message, response)
+            self.app.call_from_thread(self._refresh_status)
         except KeyboardInterrupt:
-            self.call_from_thread(self._set_thinking, False)
-            self.call_from_thread(
+            self.app.call_from_thread(self._set_thinking, False)
+            self.app.call_from_thread(
                 lambda: self.query_one("#chat-log", RichLog).write(
                     RText.from_markup("[#f59e0b]Generation interrupted.[/#f59e0b]\n")
                 )
             )
         except Exception as exc:
-            self.call_from_thread(self._set_thinking, False)
-            self.call_from_thread(self._emit_error, str(exc))
+            self.app.call_from_thread(self._set_thinking, False)
+            self.app.call_from_thread(self._emit_error, str(exc))
         finally:
-            self.call_from_thread(lambda: self.query_one("#chat-input", Input).focus())
+            self.app.call_from_thread(lambda: self.query_one("#chat-input", Input).focus())
 
 
 class AthenaApp(App):
