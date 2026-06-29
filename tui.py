@@ -485,6 +485,7 @@ class MainAppScreen(Widget):
         super().__init__()
         self._app = app_ref
         self._in_chat_mode = False
+        self._slash_menu: Optional[SlashMenu] = None
 
     def compose(self) -> ComposeResult:
         with Container(id="app-container"):
@@ -507,6 +508,7 @@ class MainAppScreen(Widget):
                         yield Label("", classes="card-status-row", id="dock-status")
 
     def on_mount(self) -> None:
+        self._slash_menu = self.query_one(SlashMenu)
         self._refresh_status()
         self.query_one("#welcome-input", Input).focus()
 
@@ -541,62 +543,75 @@ class MainAppScreen(Widget):
     def _switch_to_chat_mode(self) -> None:
         if not self._in_chat_mode:
             self._in_chat_mode = True
-            # Move the slash menu into the chat dock area before hiding welcome
-            menu = self.query_one(SlashMenu)
-            menu.remove()
-            dock = self.query_one("#chat-dock-area")
-            dock_card = self.query_one("#dock-card")
-            dock.mount(menu, before=dock_card)
+            # Hide welcome, show chat — the SlashMenu stays in welcome-view
+            # but welcome-view is just hidden (display:none), not removed,
+            # so the widget stays in the DOM and _slash_menu ref stays valid.
             self.query_one("#welcome-view").display = False
             self.query_one("#chat-view").display = True
+            # Re-mount the SlashMenu inside chat-dock-area above the dock-card
+            if self._slash_menu is not None:
+                self._slash_menu.remove()
+                dock = self.query_one("#chat-dock-area")
+                dock_card = self.query_one("#dock-card")
+                dock.mount(self._slash_menu, before=dock_card)
             self.query_one("#dock-input", Input).focus()
 
-    @on(Input.Changed)
+    @on(Input.Changed, "#welcome-input, #dock-input")
     def _on_input_changed(self, event: Input.Changed) -> None:
+        menu = self._slash_menu
+        if menu is None:
+            return
         val = event.value
-        menu = self.query_one(SlashMenu)
         if val == "/":
             menu.update("/")
             menu.display = True
         elif val.startswith("/"):
             menu.update(val)
-            if menu.has_matches():
-                menu.display = True
-            else:
-                menu.display = False
+            menu.display = menu.has_matches()
         else:
             menu.display = False
 
     def on_slash_row_clicked(self, event: SlashRow.Clicked) -> None:
         """Handle click on a slash menu row."""
-        menu = self.query_one(SlashMenu)
-        menu.display = False
-        self.query_one("#welcome-input", Input).value = ""
-        self.query_one("#dock-input", Input).value = ""
+        if self._slash_menu is not None:
+            self._slash_menu.display = False
+        try:
+            self.query_one("#welcome-input", Input).value = ""
+        except Exception:
+            pass
+        try:
+            self.query_one("#dock-input", Input).value = ""
+        except Exception:
+            pass
         self.execute_command(event.command)
 
-    @on(Input.Submitted)
+    @on(Input.Submitted, "#welcome-input, #dock-input")
     def _on_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
-
-        self.query_one("#welcome-input", Input).value = ""
-        self.query_one("#dock-input", Input).value = ""
-
-        menu = self.query_one(SlashMenu)
-        if menu.display and menu.has_matches():
+        try:
+            self.query_one("#welcome-input", Input).value = ""
+        except Exception:
+            pass
+        try:
+            self.query_one("#dock-input", Input).value = ""
+        except Exception:
+            pass
+        menu = self._slash_menu
+        if menu is not None and menu.display and menu.has_matches():
             selected = menu.get_selected()
             menu.display = False
             if selected:
                 self.execute_command(selected)
             return
-        menu.display = False
+        if menu is not None:
+            menu.display = False
         self.execute_command(text)
 
     def on_key(self, event) -> None:
-        menu = self.query_one(SlashMenu)
-        if menu.display:
+        menu = self._slash_menu
+        if menu is not None and menu.display:
             if event.key == "up":
                 menu.move_up()
                 event.stop()
