@@ -200,6 +200,12 @@ class AthenaAgent:
         if decisions_ctx:
             system_prompt = system_prompt + "\n\n" + decisions_ctx
 
+        # Check for business & company context
+        import business_manager
+        business_ctx = business_manager.get_relevant_business_context(user_message)
+        if business_ctx:
+            system_prompt = system_prompt + "\n\n" + business_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
