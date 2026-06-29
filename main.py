@@ -819,15 +819,7 @@ def main():
         import api_server
         api_server.start_api_server(port=args.port)
     elif args.command == "chat":
-        if getattr(args, "no_tui", False):
-            run_chat_loop(args.project, args.session)
-        else:
-            try:
-                from tui import run as tui_run
-                tui_run(project_id=args.project, session_id=args.session)
-            except ImportError:
-                console.print("[yellow]textual not installed, falling back to legacy shell.[/yellow]")
-                run_chat_loop(args.project, args.session)
+        run_chat_loop(args.project, args.session)
 
 if __name__ == "__main__":
     main()
