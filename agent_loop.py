@@ -194,6 +194,12 @@ class AthenaAgent:
         if people_ctx:
             system_prompt = system_prompt + "\n\n" + people_ctx
 
+        # Check for projects context
+        import projects_manager
+        projects_ctx = projects_manager.get_relevant_projects_context(user_message)
+        if projects_ctx:
+            system_prompt = system_prompt + "\n\n" + projects_ctx
+
         # Check for decision records context (ADRs)
         import decisions_manager
         decisions_ctx = decisions_manager.get_relevant_decisions_context(user_message)

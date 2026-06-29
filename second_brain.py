@@ -7,6 +7,7 @@ from pathlib import Path
 import memory_engine
 import memory_sweep
 import people_manager
+import projects_manager
 import decisions_manager
 import business_manager
 import schedule_manager
@@ -22,11 +23,13 @@ class SecondBrainEngine:
     """
     def __init__(self):
         self.people = people_manager
+        self.projects = projects_manager
         self.decisions = decisions_manager
         self.business = business_manager
         self.schedule = schedule_manager
         self.insights = insights_manager
         self.daily = daily_manager
+
         
     def run_brain_consolidation(self) -> dict:
         """
