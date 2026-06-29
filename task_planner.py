@@ -97,8 +97,10 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
                         {"role": "user", "content": prompt}
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0.0
+                    temperature=0.0,
+                    timeout=5.0
                 )
+
                 content = response.choices[0].message.content
                 providers.record_success(provider)
                 
