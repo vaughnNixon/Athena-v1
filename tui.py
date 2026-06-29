@@ -180,7 +180,7 @@ Screen {
     padding-bottom: 1;
 }
 
-#slash-menu {
+#welcome-slash-menu, #dock-slash-menu {
     width: 85%;
     max-width: 82;
     min-width: 34;
@@ -436,8 +436,8 @@ class SlashRow(Widget):
 class SlashMenu(Widget):
     selected_index: reactive[int] = reactive(0)
 
-    def __init__(self) -> None:
-        super().__init__(id="slash-menu")
+    def __init__(self, id: str = "slash-menu") -> None:
+        super().__init__(id=id)
         self._matches: List[Tuple[str, str]] = []
 
     def update(self, query: str) -> None:
@@ -485,13 +485,12 @@ class MainAppScreen(Widget):
         super().__init__()
         self._app = app_ref
         self._in_chat_mode = False
-        self._slash_menu: Optional[SlashMenu] = None
 
     def compose(self) -> ComposeResult:
         with Container(id="app-container"):
             with Vertical(id="welcome-view"):
                 yield Label(ASCII_LOGO, id="logo-label")
-                yield SlashMenu()
+                yield SlashMenu(id="welcome-slash-menu")
                 with Container(classes="prompt-card", id="welcome-card"):
                     yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="welcome-input")
                     yield Label("", classes="card-status-row", id="welcome-status")
@@ -503,14 +502,23 @@ class MainAppScreen(Widget):
                 yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
                 with Vertical(id="chat-dock-area"):
                     yield Label("Athena is thinking... (Ctrl+C to stop)", id="thinking-label")
+                    yield SlashMenu(id="dock-slash-menu")
                     with Container(classes="prompt-card", id="dock-card"):
                         yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="dock-input")
                         yield Label("", classes="card-status-row", id="dock-status")
 
     def on_mount(self) -> None:
-        self._slash_menu = self.query_one(SlashMenu)
         self._refresh_status()
         self.query_one("#welcome-input", Input).focus()
+
+    def _get_slash_menu(self) -> Optional[SlashMenu]:
+        try:
+            if self._in_chat_mode:
+                return self.query_one("#dock-slash-menu", SlashMenu)
+            else:
+                return self.query_one("#welcome-slash-menu", SlashMenu)
+        except Exception:
+            return None
 
     def _get_status_text(self) -> str:
         try:
@@ -543,75 +551,63 @@ class MainAppScreen(Widget):
     def _switch_to_chat_mode(self) -> None:
         if not self._in_chat_mode:
             self._in_chat_mode = True
-            # Hide welcome, show chat — the SlashMenu stays in welcome-view
-            # but welcome-view is just hidden (display:none), not removed,
-            # so the widget stays in the DOM and _slash_menu ref stays valid.
+            menu = self._get_slash_menu()
+            if menu:
+                menu.display = False
             self.query_one("#welcome-view").display = False
             self.query_one("#chat-view").display = True
-            # Re-mount the SlashMenu inside chat-dock-area above the dock-card
-            if self._slash_menu is not None:
-                self._slash_menu.remove()
-                dock = self.query_one("#chat-dock-area")
-                dock_card = self.query_one("#dock-card")
-                dock.mount(self._slash_menu, before=dock_card)
             self.query_one("#dock-input", Input).focus()
 
-    @on(Input.Changed, "#welcome-input, #dock-input")
+    @on(Input.Changed)
     def _on_input_changed(self, event: Input.Changed) -> None:
-        menu = self._slash_menu
-        if menu is None:
-            return
         val = event.value
+        menu = self._get_slash_menu()
+        if not menu:
+            return
         if val == "/":
             menu.update("/")
             menu.display = True
         elif val.startswith("/"):
             menu.update(val)
-            menu.display = menu.has_matches()
+            if menu.has_matches():
+                menu.display = True
+            else:
+                menu.display = False
         else:
             menu.display = False
 
     def on_slash_row_clicked(self, event: SlashRow.Clicked) -> None:
         """Handle click on a slash menu row."""
-        if self._slash_menu is not None:
-            self._slash_menu.display = False
-        try:
-            self.query_one("#welcome-input", Input).value = ""
-        except Exception:
-            pass
-        try:
-            self.query_one("#dock-input", Input).value = ""
-        except Exception:
-            pass
+        menu = self._get_slash_menu()
+        if menu:
+            menu.display = False
+        self.query_one("#welcome-input", Input).value = ""
+        self.query_one("#dock-input", Input).value = ""
         self.execute_command(event.command)
 
-    @on(Input.Submitted, "#welcome-input, #dock-input")
+    @on(Input.Submitted)
     def _on_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
-        try:
-            self.query_one("#welcome-input", Input).value = ""
-        except Exception:
-            pass
-        try:
-            self.query_one("#dock-input", Input).value = ""
-        except Exception:
-            pass
-        menu = self._slash_menu
-        if menu is not None and menu.display and menu.has_matches():
+
+        self.query_one("#welcome-input", Input).value = ""
+        self.query_one("#dock-input", Input).value = ""
+
+        menu = self._get_slash_menu()
+        if menu and menu.display and menu.has_matches():
             selected = menu.get_selected()
             menu.display = False
             if selected:
                 self.execute_command(selected)
             return
-        if menu is not None:
+        if menu:
             menu.display = False
         self.execute_command(text)
 
     def on_key(self, event) -> None:
-        menu = self._slash_menu
-        if menu is not None and menu.display:
+        menu = self._get_slash_menu()
+        if menu and menu.display:
             if event.key == "up":
                 menu.move_up()
                 event.stop()
