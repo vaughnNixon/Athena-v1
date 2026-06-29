@@ -206,6 +206,12 @@ class AthenaAgent:
         if business_ctx:
             system_prompt = system_prompt + "\n\n" + business_ctx
 
+        # Check for meetings, tasks, assignments & deadlines context
+        import schedule_manager
+        schedule_ctx = schedule_manager.get_relevant_schedule_context(user_message)
+        if schedule_ctx:
+            system_prompt = system_prompt + "\n\n" + schedule_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
