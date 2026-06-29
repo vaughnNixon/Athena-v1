@@ -414,6 +414,11 @@ class CommandPaletteScreen(ModalScreen):
 class SlashRow(Widget):
     can_focus = False
 
+    class Clicked(Message):
+        def __init__(self, command: str) -> None:
+            super().__init__()
+            self.command = command
+
     def __init__(self, cmd: str, desc: str, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._cmd = cmd
@@ -423,6 +428,9 @@ class SlashRow(Widget):
     def compose(self) -> ComposeResult:
         yield Label(self._cmd,  classes="slash-cmd")
         yield Label(self._desc, classes="slash-desc")
+
+    def on_click(self) -> None:
+        self.post_message(self.Clicked(self._cmd))
 
 
 class SlashMenu(Widget):
@@ -482,6 +490,7 @@ class MainAppScreen(Widget):
         with Container(id="app-container"):
             with Vertical(id="welcome-view"):
                 yield Label(ASCII_LOGO, id="logo-label")
+                yield SlashMenu()
                 with Container(classes="prompt-card", id="welcome-card"):
                     yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="welcome-input")
                     yield Label("", classes="card-status-row", id="welcome-status")
@@ -493,7 +502,6 @@ class MainAppScreen(Widget):
                 yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
                 with Vertical(id="chat-dock-area"):
                     yield Label("Athena is thinking... (Ctrl+C to stop)", id="thinking-label")
-                    yield SlashMenu()
                     with Container(classes="prompt-card", id="dock-card"):
                         yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="dock-input")
                         yield Label("", classes="card-status-row", id="dock-status")
@@ -521,12 +529,24 @@ class MainAppScreen(Widget):
 
     def _refresh_status(self) -> None:
         st = self._get_status_text()
-        self.query_one("#welcome-status", Label).update(RText.from_markup(st))
-        self.query_one("#dock-status", Label).update(RText.from_markup(st))
+        try:
+            self.query_one("#welcome-status", Label).update(RText.from_markup(st))
+        except Exception:
+            pass
+        try:
+            self.query_one("#dock-status", Label).update(RText.from_markup(st))
+        except Exception:
+            pass
 
     def _switch_to_chat_mode(self) -> None:
         if not self._in_chat_mode:
             self._in_chat_mode = True
+            # Move the slash menu into the chat dock area before hiding welcome
+            menu = self.query_one(SlashMenu)
+            menu.remove()
+            dock = self.query_one("#chat-dock-area")
+            dock_card = self.query_one("#dock-card")
+            dock.mount(menu, before=dock_card)
             self.query_one("#welcome-view").display = False
             self.query_one("#chat-view").display = True
             self.query_one("#dock-input", Input).focus()
@@ -535,7 +555,10 @@ class MainAppScreen(Widget):
     def _on_input_changed(self, event: Input.Changed) -> None:
         val = event.value
         menu = self.query_one(SlashMenu)
-        if val.startswith("/") and val != "/":
+        if val == "/":
+            menu.update("/")
+            menu.display = True
+        elif val.startswith("/"):
             menu.update(val)
             if menu.has_matches():
                 menu.display = True
@@ -543,6 +566,14 @@ class MainAppScreen(Widget):
                 menu.display = False
         else:
             menu.display = False
+
+    def on_slash_row_clicked(self, event: SlashRow.Clicked) -> None:
+        """Handle click on a slash menu row."""
+        menu = self.query_one(SlashMenu)
+        menu.display = False
+        self.query_one("#welcome-input", Input).value = ""
+        self.query_one("#dock-input", Input).value = ""
+        self.execute_command(event.command)
 
     @on(Input.Submitted)
     def _on_submitted(self, event: Input.Submitted) -> None:
@@ -596,7 +627,16 @@ class MainAppScreen(Widget):
         agent = self._app.agent
         log = self.query_one("#chat-log", RichLog)
 
-        if cmd == "/caveman":
+        if cmd == "/menu":
+            t = RTable(title="Athena Commands", border_style="dim", title_style="bold #d4a843")
+            t.add_column("Command", style="#d4a843", min_width=14)
+            t.add_column("Description", style="#a1a1aa")
+            for c, d in SLASH_COMMANDS:
+                t.add_row(c, d)
+            log.write(t)
+            log.write("")
+
+        elif cmd == "/caveman":
             agent.caveman_mode = not agent.caveman_mode
             status = "ON" if agent.caveman_mode else "OFF"
             color = "#22c55e" if agent.caveman_mode else "#f59e0b"
@@ -650,7 +690,6 @@ class MainAppScreen(Widget):
                 f"[#22c55e]Session archived. New session [bold]{new_sid}[/bold] started.[/#22c55e]\n"
                 "[dim]Context carried over seamlessly.[/dim]\n"
             ))
-            self._refresh_header()
             self._refresh_status()
 
         elif cmd == "/rollback":
