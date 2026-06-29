@@ -188,6 +188,12 @@ class AthenaAgent:
         else:
             system_prompt = base_system
 
+        # Check for personal entity profile mentions (Lucky, Ringgu, family, friends)
+        import people_manager
+        people_ctx = people_manager.get_relevant_people_context(user_message)
+        if people_ctx:
+            system_prompt = system_prompt + "\n\n" + people_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
