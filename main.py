@@ -734,6 +734,15 @@ def run_chat_loop(project_id: str, session_id: str):
                 console.print(Panel(daily_content, title=f"Daily Note ({dt_str})", border_style="cyan"))
                 continue
 
+            if cmd_lower in ("/brain", "/sweep", "/consolidate"):
+                import second_brain
+                console.print("[dim]Executing Second Brain consolidation sweep ('Sleep' routine)...[/dim]")
+                res = second_brain.run_consolidation()
+                console.print(f"[bold green]✓ Brain Consolidation complete in {res['elapsed_seconds']}s.[/bold green]")
+                console.print(f"[dim]Date: {res['date']} | Entities Tracked: {res['entities_tracked']} | Daily Log: {res['daily_status']}[/dim]\n")
+                continue
+
+
 
 
 
