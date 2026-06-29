@@ -218,6 +218,12 @@ class AthenaAgent:
         if daily_ctx:
             system_prompt = system_prompt + "\n\n" + daily_ctx
 
+        # Check for personal wisdom, insights, frameworks & quotes context
+        import insights_manager
+        insights_ctx = insights_manager.get_relevant_insights_context(user_message)
+        if insights_ctx:
+            system_prompt = system_prompt + "\n\n" + insights_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
