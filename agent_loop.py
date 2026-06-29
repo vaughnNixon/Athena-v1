@@ -73,77 +73,6 @@ class AthenaAgent:
         3. If LLM doesn't call tool:
            a. Return response immediately (no extra latency)
         """
-        # Intercept correction messages for adaptive learning
-        intent = retrieval.classify_query_intent(user_message)
-        if intent == "correction" and self.history:
-            prev_user_msg = None
-            prev_assistant_content = None
-            for item in reversed(self.history):
-                if item.get("role") == "user" and prev_user_msg is None:
-                    prev_user_msg = item.get("content", "")
-                elif item.get("role") == "assistant" and prev_assistant_content is None:
-                    prev_assistant_content = item.get("content", "")
-            
-            if prev_user_msg and prev_assistant_content:
-                last_info = getattr(self, "last_retrieval_info", None)
-                if not last_info:
-                    last_info = {
-                        "query": prev_user_msg,
-                        "matched_chunk_ids": [],
-                        "retrieval_stage": "none",
-                        "timestamp": int(time.time()) - 10
-                    }
-                
-                learn_res = learning_engine.learn_from_feedback(
-                    user_query=prev_user_msg,
-                    user_correction=user_message,
-                    last_retrieval_info=last_info,
-                    prev_response_text=prev_assistant_content
-                )
-                
-                explanation = learn_res.get("explanation", "No explanation provided.")
-                logger.info("Adaptive learning executed: %s", explanation)
-                
-                # Re-run staged retrieval with corrected skip scores
-                staged_result = retrieval.retrieve_memories_staged(
-                    query=prev_user_msg,
-                    scope_ids=[self.project_id]
-                )
-                
-                self.last_retrieval_info = {
-                    "query": prev_user_msg,
-                    "matched_chunk_ids": staged_result.get("matched_chunk_ids", []),
-                    "retrieval_stage": staged_result.get("retrieval_stage", "none"),
-                    "timestamp": int(time.time())
-                }
-                self.last_retrieval_trace = staged_result.get("trace")
-                
-                memories_block = _format_staged_result(staged_result)
-                
-                correction_prompt = (
-                    f"The user pointed out an error in the previous answer: '{user_message}'\n"
-                    f"The previous query was: '{prev_user_msg}'\n"
-                    f"The previous incorrect answer was: '{prev_assistant_content}'\n"
-                    f"Here are the corrected long-term memories retrieved:\n{memories_block}\n\n"
-                    "Provide a corrected response to the previous query, addressing the user's correction explicitly, "
-                    "using only the new correct memory facts. Prefix your response with: "
-                    "[Athena has adjusted memory retrieval based on feedback]\n"
-                )
-                
-                messages = [
-                    {"role": "system", "content": "You are Athena v1, a helpful dialogue agent with adaptive learning memory."},
-                    {"role": "user", "content": correction_prompt}
-                ]
-                response = self._call_llm_with_tools(messages=messages)
-                corrected_answer = response.get("content", "ACK.")
-                
-                # Save turn to history and exit
-                self.history.append({"role": "user", "content": user_message})
-                self.history.append({"role": "assistant", "content": corrected_answer})
-                self._save_history()
-                
-                return corrected_answer
-
         # Task Planner Routing
         plan = task_planner.plan(user_message, project_id=self.project_id)
         if plan:
@@ -304,6 +233,66 @@ class AthenaAgent:
                     
                     # Call LLM again with memory context
                     response = self._call_llm_with_tools(messages=messages)
+                elif tool_call["name"] == "report_correction":
+                    user_corr = tool_call["arguments"].get("user_correction", user_message)
+                    prev_user_msg = None
+                    prev_assistant_content = None
+                    for item in reversed(self.history):
+                        if item.get("role") == "user" and prev_user_msg is None:
+                            prev_user_msg = item.get("content", "")
+                        elif item.get("role") == "assistant" and prev_assistant_content is None:
+                            prev_assistant_content = item.get("content", "")
+                    
+                    if prev_user_msg and prev_assistant_content:
+                        last_info = getattr(self, "last_retrieval_info", None) or {
+                            "query": prev_user_msg,
+                            "matched_chunk_ids": [],
+                            "retrieval_stage": "none",
+                            "timestamp": int(time.time()) - 10
+                        }
+                        learn_res = learning_engine.learn_from_feedback(
+                            user_query=prev_user_msg,
+                            user_correction=user_corr,
+                            last_retrieval_info=last_info,
+                            prev_response_text=prev_assistant_content
+                        )
+                        logger.info("Adaptive learning executed via tool call: %s", learn_res.get("explanation"))
+                        staged_result = retrieval.retrieve_memories_staged(
+                            query=prev_user_msg,
+                            scope_ids=[self.project_id]
+                        )
+                        self.last_retrieval_info = {
+                            "query": prev_user_msg,
+                            "matched_chunk_ids": staged_result.get("matched_chunk_ids", []),
+                            "retrieval_stage": staged_result.get("retrieval_stage", "none"),
+                            "timestamp": int(time.time())
+                        }
+                        self.last_retrieval_trace = staged_result.get("trace")
+                        memories_block = _format_staged_result(staged_result)
+                        tool_output = f"[Athena has adjusted memory retrieval based on feedback]\nUpdated long-term memories retrieved:\n{memories_block}"
+                    else:
+                        tool_output = "Correction feedback recorded."
+
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call["name"],
+                                    "arguments": json.dumps(tool_call["arguments"])
+                                }
+                            }
+                        ]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": tool_output
+                    })
+                    response = self._call_llm_with_tools(messages=messages)
         
         # 7. Extract response content
         assistant_content = response.get("content", "ACK.")
@@ -403,7 +392,10 @@ class AthenaAgent:
                 
                 try:
                     if enable_tools:
-                        tools = [get_retrieve_memories_tool_definition()]
+                        tools = [
+                            get_retrieve_memories_tool_definition(),
+                            get_report_correction_tool_definition()
+                        ]
                         response = client.chat.completions.create(
                             model=model,
                             messages=cleaned_messages,
@@ -533,6 +525,34 @@ def get_retrieve_memories_tool_definition() -> dict:
                     }
                 },
                 "required": ["query"]
+            }
+        }
+    }
+
+
+def get_report_correction_tool_definition() -> dict:
+    """
+    Returns the OpenAI-compatible tool definition for user feedback correction.
+    Used by the LLM when the user explicitly points out an error in previous turn.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "report_correction",
+            "description": (
+                "Call this tool ONLY when the user explicitly points out a mistake, error, or incorrect fact in your previous response. "
+                "Do NOT call this tool for casual greetings, general questions, or conversation. "
+                "Use this tool to trigger adaptive learning and update memory weights when you made an error."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_correction": {
+                        "type": "string",
+                        "description": "The specific correction provided by the user."
+                    }
+                },
+                "required": ["user_correction"]
             }
         }
     }
