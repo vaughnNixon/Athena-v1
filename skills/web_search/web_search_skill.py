@@ -64,24 +64,10 @@ class WebSearchSkill(BaseSkill):
             )
             return self._build_subagent_result(task, cap, response, ctx)
 
-        # 2. Multi-Provider Failover Execution with Query Variations
-        queries_to_try = [query]
-        q_clean = query.lower().replace("go find", "").replace("what is", "").replace("find", "").replace("check", "").strip()
-        if "latest model" in query.lower() or "newest model" in query.lower() or "latest" in query.lower():
-            queries_to_try.append(f"{q_clean} release announcement")
-            queries_to_try.append(f"{q_clean} AI model")
-        if "qwen" in query.lower():
-            queries_to_try.append("Qwen AI model release Alibaba")
-            queries_to_try.append("Qwen agentic world model")
-
-        response = None
-        for q in queries_to_try:
-            resp = self._execute_with_failover(q, cap, ctx)
-            if resp and resp.results:
-                response = resp
-                break
-        if not response:
-            response = resp
+        # 2. Multi-Provider Failover Execution
+        q_clean = query.lower().replace("can u search the web for me about", "").replace("search the web for me about", "").replace("search web for", "").replace("search for", "").strip()
+        search_query = q_clean if q_clean else query
+        response = self._execute_with_failover(search_query, cap, ctx)
 
         if not response:
             return SubagentResult(
