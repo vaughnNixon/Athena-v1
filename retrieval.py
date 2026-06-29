@@ -175,8 +175,13 @@ def classify_query_intent(query: str) -> str:
     words = get_word_set(query)
     
     # Check for correction indicators
-    correction_phrases = ["that's incorrect", "thats incorrect", "try again", "not what i meant", "you missed", "that is incorrect"]
-    correction_words = {"wrong", "no", "incorrect"}
+    correction_phrases = [
+        "that's incorrect", "thats incorrect", "that is incorrect", "try again",
+        "not what i meant", "you missed", "that's wrong", "thats wrong",
+        "that is wrong", "you're wrong", "you are wrong", "not correct",
+        "that's not right", "thats not right"
+    ]
+    correction_words = {"wrong", "incorrect"}
     if any(phrase in q for phrase in correction_phrases) or any(w in words for w in correction_words):
         return "correction"
         
