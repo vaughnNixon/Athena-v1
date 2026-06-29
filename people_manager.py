@@ -21,6 +21,13 @@ def list_people() -> dict:
         result[name_key] = f
     return result
 
+_REGEX_CACHE = {}
+
+def get_compiled_regex(name: str):
+    if name not in _REGEX_CACHE:
+        _REGEX_CACHE[name] = re.compile(rf"\b{re.escape(name)}\b")
+    return _REGEX_CACHE[name]
+
 def get_relevant_people_context(user_message: str) -> str:
     """
     Scans user message for mentions of registered personal entities (friends, family, pets).
@@ -35,12 +42,14 @@ def get_relevant_people_context(user_message: str) -> str:
     
     for name, fpath in people_map.items():
         # Word boundary match to avoid false positives (e.g. "luck" matching "lucky")
-        if re.search(rf"\b{re.escape(name)}\b", msg_lower):
+        pattern = get_compiled_regex(name)
+        if pattern.search(msg_lower):
             try:
                 content = fpath.read_text(encoding="utf-8").strip()
                 matched_contexts.append(f"--- PERSONAL ENTITY PROFILE ({name.title()}) ---\n{content}")
             except Exception as e:
                 logger.warning("Failed to read entity profile for %s: %s", name, e)
+
                 
     if matched_contexts:
         return "\n\n".join(matched_contexts)
