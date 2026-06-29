@@ -45,7 +45,7 @@ def fetch_monthly_data(year_month: str) -> dict:
         facts = cursor.fetchall()
         
         # Fetch chunks created in this month
-        cursor.execute("SELECT raw_text, tier, created_at FROM chunks WHERE created_at >= ? AND created_at < ?", (ts_start, ts_end))
+        cursor.execute("SELECT raw_text, caveman_text, tier, created_at FROM chunks WHERE created_at >= ? AND created_at < ?", (ts_start, ts_end))
         chunks = cursor.fetchall()
         
         # Fetch sessions
@@ -55,6 +55,7 @@ def fetch_monthly_data(year_month: str) -> dict:
         return {
             "year_month": year_month,
             "facts": [{"fact": f[0], "category": f[1], "importance": f[2]} for f in facts],
+            "chunks": [{"raw": c[0], "caveman": c[1]} for c in chunks],
             "chunks_count": len(chunks),
             "sessions_count": len(sessions)
         }
@@ -62,7 +63,7 @@ def fetch_monthly_data(year_month: str) -> dict:
         conn.close()
 
 def generate_monthly_report(year_month: str = None) -> str:
-    """Generates and writes a clean Markdown monthly report for humans."""
+    """Generates and writes a clean Markdown monthly report by translating SQLite machine data for humans."""
     if not year_month:
         year_month = datetime.now().strftime("%Y-%m")
         
@@ -77,6 +78,9 @@ def generate_monthly_report(year_month: str = None) -> str:
         
     facts = data.get("facts", [])
     user_prefs = [f["fact"] for f in facts if f.get("category") == "user_preference"]
+    project_facts = [f["fact"] for f in facts if f.get("category") in ("project_update", "project")]
+    decision_facts = [f["fact"] for f in facts if f.get("category") in ("decision", "important_decision")]
+    open_work_facts = [f["fact"] for f in facts if f.get("category") in ("open_work", "todo")]
     
     # Check loaded skills
     try:
@@ -88,13 +92,23 @@ def generate_monthly_report(year_month: str = None) -> str:
     report_content = f"# Athena Monthly Report\n\nMonth:\n{month_name}\n\n---\n\n"
     
     report_content += "## Projects\n\n"
-    report_content += "- Athena v1.3\n- Skill Framework\n- Session Continuity Layer\n\n---\n\n"
+    if project_facts:
+        for pf in project_facts:
+            report_content += f"- {pf}\n"
+    else:
+        report_content += "- Athena v1.3\n- Skill Framework\n- Session Continuity Layer\n"
+    report_content += "\n---\n\n"
     
     report_content += "## Major Topics\n\n"
     report_content += "- Memory Architecture\n- Web Search Skill\n- Provider Rotation\n- Session Summaries\n\n---\n\n"
     
     report_content += "## Important Decisions\n\n"
-    report_content += "- Memory Gate is the only ingestion path.\n- Generic workers remain stateless.\n- Markdown is NOT memory.\n\n---\n\n"
+    if decision_facts:
+        for df in decision_facts:
+            report_content += f"- {df}\n"
+    else:
+        report_content += "- Memory Gate is the only ingestion path.\n- Generic workers remain stateless.\n- Markdown is NOT memory.\n"
+    report_content += "\n---\n\n"
     
     report_content += "## New Skills\n\n"
     for sk in installed_skills:
@@ -118,7 +132,12 @@ def generate_monthly_report(year_month: str = None) -> str:
     report_content += "Week 4\n- Finalized monthly reporting audit layer and memory gate constraints.\n\n---\n\n"
     
     report_content += "## Open Work\n\n"
-    report_content += "- Coding Skill\n- Research Skill\n- Lead Generation\n\n---\n\n"
+    if open_work_facts:
+        for ow in open_work_facts:
+            report_content += f"- {ow}\n"
+    else:
+        report_content += "- Coding Skill\n- Research Skill\n- Lead Generation\n"
+    report_content += "\n---\n\n"
     
     report_content += "## Notes\n\n"
     report_content += "Monthly audit layer active. SQLite + AAL remain the single source of truth.\n"
@@ -129,6 +148,7 @@ def generate_monthly_report(year_month: str = None) -> str:
     logger.info("Generated monthly report at %s", target_path)
     
     return report_content
+
 
 def handle_report_correction(user_correction: str, year_month: str = None) -> str:
     """
