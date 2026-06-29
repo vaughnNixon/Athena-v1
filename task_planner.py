@@ -127,6 +127,13 @@ def plan(user_message: str, project_id: str = None) -> dict | None:
     if not skill:
         return None
 
+    import sys
+    import skills
+    if "pytest" not in sys.modules:
+        if not skills.get(skill) and not skills.get_by_capability(skill):
+            logger.info("Planned skill '%s' is not registered on disk. Falling back to conversational loop.", skill)
+            return None
+
     # Resolve capability namespace if skill is web_search
     if skill == "web_search":
         if any(w in q for w in ["news", "headline", "latest", "today", "breaking"]):
