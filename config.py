@@ -159,3 +159,26 @@ def fetch_caveman_skills(force: bool = False):
         _do_fetch()
     else:
         threading.Thread(target=_do_fetch, daemon=True).start()
+
+def load_persona_files() -> dict:
+    """Loads identity.md, soul.md, and user.md from workspace root or Athena home."""
+    workspace_root = Path(__file__).parent.resolve()
+    home = get_athena_home()
+    
+    result = {}
+    for key in ["identity", "soul", "user"]:
+        # Check workspace root first, then home dir
+        f_path = workspace_root / f"{key}.md"
+        if not f_path.exists():
+            f_path = home / f"{key}.md"
+            
+        if f_path.exists():
+            try:
+                result[key] = f_path.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.warning("Failed to read %s.md: %s", key, e)
+                result[key] = ""
+        else:
+            result[key] = ""
+            
+    return result

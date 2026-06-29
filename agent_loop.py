@@ -173,7 +173,21 @@ class AthenaAgent:
         if system_message:
             base_system = f"{system_message}\n{base_system}"
         
-        system_prompt = base_system
+        # Load persona files (identity.md, soul.md, user.md)
+        persona = config.load_persona_files()
+        persona_blocks = []
+        if persona.get("identity"):
+            persona_blocks.append(f"--- IDENTITY ---\n{persona['identity']}")
+        if persona.get("soul"):
+            persona_blocks.append(f"--- SOUL ---\n{persona['soul']}")
+        if persona.get("user"):
+            persona_blocks.append(f"--- USER PROFILE ---\n{persona['user']}")
+            
+        if persona_blocks:
+            system_prompt = "\n\n".join(persona_blocks) + "\n\n" + base_system
+        else:
+            system_prompt = base_system
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
