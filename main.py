@@ -723,6 +723,18 @@ def run_chat_loop(project_id: str, session_id: str):
                 console.print(Panel(rep_content[:500] + "\n\n[dim]... (Full report saved to file)[/dim]", title=f"Monthly Report ({ym_str})", border_style="gold3"))
                 continue
 
+            if cmd_lower.startswith("/daily"):
+                import daily_manager
+                parts = stripped_input.split()
+                dt = parts[1] if len(parts) > 1 else None
+                daily_content = daily_manager.generate_daily_note(date_str=dt)
+                dt_str = dt if dt else datetime.now().strftime("%Y-%m-%d")
+                daily_path = daily_manager.get_daily_dir() / f"{dt_str}.md"
+                console.print(f"[bold green]✓ Daily Note generated successfully at [cyan]{daily_path}[/cyan][/bold green]\n")
+                console.print(Panel(daily_content, title=f"Daily Note ({dt_str})", border_style="cyan"))
+                continue
+
+
 
 
             # Process turn with graceful Ctrl+C interrupt handler

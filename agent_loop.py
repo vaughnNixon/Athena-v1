@@ -212,6 +212,12 @@ class AthenaAgent:
         if schedule_ctx:
             system_prompt = system_prompt + "\n\n" + schedule_ctx
 
+        # Check for daily journal context
+        import daily_manager
+        daily_ctx = daily_manager.get_relevant_daily_context(user_message)
+        if daily_ctx:
+            system_prompt = system_prompt + "\n\n" + daily_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
