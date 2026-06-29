@@ -30,7 +30,16 @@ from agent_loop import AthenaAgent
 
 VERSION = "v1.3"
 
+ASCII_LOGO = """
+  █████╗ ████████╗██╗  ██╗███████╗███╗   ██╗█████╗ 
+ ██╔══██╗╚══██╔══╝██║  ██║██╔════╝████╗  ██║██╔══██╗
+ ███████║   ██║   ███████║█████╗  ██╔██╗ ██║███████║
+ ██╔══██║   ██║   ██╔══██║██╔══╝  ██║╚██╗██║██╔══██║
+ ██║  ██║   ██║   ██║  ██║███████╗██║ ╚████║██║  ██║
+ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝"""
+
 SLASH_COMMANDS: List[Tuple[str, str]] = [
+    ("/menu",      "Open mobile & desktop interactive command menu"),
     ("/caveman",   "Toggle caveman compressed response mode"),
     ("/topics",    "Show active session topics"),
     ("/pin",       "Pin a topic -- prevents auto-deactivation"),
@@ -71,173 +80,222 @@ PALETTE_SECTIONS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
 
 CSS = """
 Screen {
-    background: #0d0d0d;
+    background: #09090b;
 }
-#header {
-    height: 3;
-    background: #111111;
-    border-bottom: solid #1e1e1e;
-    layout: horizontal;
-    align: left middle;
-    padding: 0 2;
+
+#app-container {
+    width: 100%;
+    height: 100%;
+    layout: vertical;
+    align: center middle;
 }
-#header-title {
+
+#welcome-view {
+    width: 100%;
+    height: 100%;
+    layout: vertical;
+    align: center middle;
+    padding: 1 2;
+}
+
+#logo-label {
     color: #d4a843;
-    width: auto;
     text-style: bold;
+    margin-bottom: 2;
+    content-align: center middle;
 }
-#header-sep {
-    color: #2d2d2d;
-    width: auto;
-    padding: 0 1;
+
+.prompt-card {
+    width: 85%;
+    max-width: 82;
+    min-width: 34;
+    height: auto;
+    background: #161618;
+    border-left: solid #d4a843;
+    padding: 1 2;
+    margin-bottom: 0;
 }
-#header-info {
-    color: #374151;
-    width: 1fr;
+
+.card-input {
+    width: 100%;
+    background: #161618;
+    border: none;
+    color: #f4f4f5;
+    padding: 0;
 }
-#header-shortcuts {
-    color: #2d2d2d;
-    width: auto;
+
+.card-input:focus {
+    border: none;
+    background: #161618;
+}
+
+.card-status-row {
+    height: 1;
+    margin-top: 1;
+    color: #71717a;
+    font-size: 13;
+}
+
+#welcome-sub-bar {
+    width: 85%;
+    max-width: 82;
+    min-width: 34;
+    height: 1;
+    layout: horizontal;
+    margin-top: 0;
+    margin-bottom: 2;
+}
+
+#sub-shortcuts {
+    width: 100%;
+    color: #52525b;
     text-align: right;
 }
+
+#welcome-tip {
+    width: 100%;
+    content-align: center middle;
+    color: #71717a;
+    margin-top: 1;
+}
+
+#chat-view {
+    width: 100%;
+    height: 100%;
+    layout: vertical;
+    display: none;
+}
+
 #chat-log {
     height: 1fr;
     padding: 1 2;
-    scrollbar-color: #1e1e1e;
+    scrollbar-color: #27272a;
 }
-#slash-menu {
+
+#chat-dock-area {
+    width: 100%;
     height: auto;
-    max-height: 15;
-    background: #111111;
-    border-top: solid #1e1e1e;
-    display: none;
+    layout: vertical;
+    align: center middle;
+    background: #09090b;
+    padding-bottom: 1;
 }
+
+#slash-menu {
+    width: 85%;
+    max-width: 82;
+    min-width: 34;
+    height: auto;
+    max-height: 12;
+    background: #121214;
+    border: solid #27272a;
+    display: none;
+    margin-bottom: 1;
+}
+
 .slash-row {
     height: 1;
     padding: 0 2;
     layout: horizontal;
 }
+
 .slash-row.--selected {
-    background: #1e1a0f;
+    background: #272010;
 }
+
 .slash-cmd {
-    width: 14;
+    width: 16;
     color: #d4a843;
+    text-style: bold;
 }
+
 .slash-desc {
     width: 1fr;
-    color: #4b5563;
+    color: #a1a1aa;
 }
-#status-bar {
-    height: 1;
-    background: #0a0a0a;
-    border-top: solid #1a1a1a;
-    layout: horizontal;
-    align: left middle;
-    padding: 0 2;
-}
-#status-left {
-    width: 1fr;
-    color: #374151;
-}
-#status-right {
-    width: auto;
-    color: #2d2d2d;
-    text-align: right;
-}
-#input-row {
-    height: 3;
-    layout: horizontal;
-    border-top: solid #1a1a1a;
-    background: #0d0d0d;
-    align: left middle;
-}
-#input-prefix {
-    width: 6;
+
+#thinking-label {
+    width: 85%;
+    max-width: 82;
     color: #d4a843;
+    margin-bottom: 1;
     content-align: center middle;
-    padding: 0 1;
-}
-#chat-input {
-    width: 1fr;
-    background: #0d0d0d;
-    border: none;
-    color: #e5e7eb;
-    padding: 0;
-}
-#chat-input:focus {
-    border: none;
-    background: #0d0d0d;
-}
-#thinking-row {
-    height: 1;
-    layout: horizontal;
-    padding: 0 2;
     display: none;
 }
-#thinking-label {
-    color: #374151;
-}
+
 CommandPaletteScreen {
     align: center middle;
-    background: #0d0d0d 80%;
+    background: #000000 80%;
 }
+
 #palette-box {
-    width: 72;
+    width: 76;
+    max-width: 95%;
     height: auto;
-    max-height: 38;
-    background: #111111;
-    border: solid #2d2d2d;
+    max-height: 36;
+    background: #121214;
+    border: solid #27272a;
     padding: 1 2;
 }
+
 #palette-header {
     layout: horizontal;
     height: 1;
     margin-bottom: 1;
 }
+
 #palette-title {
     width: 1fr;
-    color: #e5e7eb;
+    color: #f4f4f5;
     text-style: bold;
 }
+
 #palette-esc {
     width: auto;
-    color: #374151;
+    color: #71717a;
 }
+
 #palette-search {
     height: 3;
-    background: #161616;
-    border: solid #2d2d2d;
-    color: #e5e7eb;
+    background: #18181b;
+    border: solid #27272a;
+    color: #f4f4f5;
     margin-bottom: 1;
 }
+
 #palette-search:focus {
     border: solid #d4a843;
 }
+
 #palette-scroll {
     height: auto;
-    max-height: 26;
+    max-height: 24;
 }
+
 .pal-section {
     color: #d4a843;
     padding: 1 0 0 0;
     text-style: bold;
 }
+
 .pal-item {
     layout: horizontal;
     height: 1;
     padding: 0 1;
 }
+
 .pal-item.--selected {
-    background: #1e1a0f;
+    background: #272010;
 }
+
 .pal-name {
     width: 1fr;
-    color: #d1d5db;
+    color: #e4e4e7;
 }
+
 .pal-hint {
     width: 14;
-    color: #374151;
+    color: #71717a;
     text-align: right;
 }
 """
@@ -276,7 +334,7 @@ class CommandPaletteScreen(ModalScreen):
 
     selected_index: reactive[int] = reactive(0)
 
-    def __init__(self, chat_screen: "ChatScreen") -> None:
+    def __init__(self, chat_screen: "MainAppScreen") -> None:
         super().__init__()
         self._chat = chat_screen
         self._all_items: List[Tuple[str, str, str]] = []
@@ -415,38 +473,37 @@ class SlashMenu(Widget):
         return bool(self._matches)
 
 
-class ChatScreen(Widget):
+class MainAppScreen(Widget):
     def __init__(self, app_ref: "AthenaApp") -> None:
         super().__init__()
         self._app = app_ref
+        self._in_chat_mode = False
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="header"):
-            yield Label(f"athena {VERSION}", id="header-title")
-            yield Label(" . ", id="header-sep")
-            yield Label("", id="header-info")
-            yield Label("/commands   ctrl+p palette", id="header-shortcuts")
-        yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
-        with Horizontal(id="thinking-row"):
-            yield Label("Athena is thinking...  (Ctrl+C to stop)", id="thinking-label")
-        yield SlashMenu()
-        with Horizontal(id="status-bar"):
-            yield Label("", id="status-left")
-            yield Label("ctrl+p  commands", id="status-right")
-        with Horizontal(id="input-row"):
-            yield Label("> ", id="input-prefix")
-            yield Input(placeholder='Ask anything...  type / for commands', id="chat-input")
+        with Container(id="app-container"):
+            with Vertical(id="welcome-view"):
+                yield Label(ASCII_LOGO, id="logo-label")
+                with Container(classes="prompt-card", id="welcome-card"):
+                    yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="welcome-input")
+                    yield Label("", classes="card-status-row", id="welcome-status")
+                with Horizontal(id="welcome-sub-bar"):
+                    yield Label("tab agents   ctrl+p commands", id="sub-shortcuts")
+                yield Label("• Tip  Use / or ctrl+p to access all 13 commands", id="welcome-tip")
+
+            with Vertical(id="chat-view"):
+                yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
+                with Vertical(id="chat-dock-area"):
+                    yield Label("Athena is thinking... (Ctrl+C to stop)", id="thinking-label")
+                    yield SlashMenu()
+                    with Container(classes="prompt-card", id="dock-card"):
+                        yield Input(placeholder='Ask anything... "search the web"', classes="card-input", id="dock-input")
+                        yield Label("", classes="card-status-row", id="dock-status")
 
     def on_mount(self) -> None:
-        self._refresh_header()
         self._refresh_status()
-        self.query_one("#chat-input", Input).focus()
-        log = self.query_one("#chat-log", RichLog)
-        log.write(RText.from_markup(
-            f"[dim]Athena {VERSION} ready. Type a message or [bold #d4a843]/[/bold #d4a843] to see commands.[/dim]\n"
-        ))
+        self.query_one("#welcome-input", Input).focus()
 
-    def _refresh_header(self) -> None:
+    def _get_status_text(self) -> str:
         try:
             from providers_manager import get_manager
             mgr = get_manager()
@@ -457,33 +514,25 @@ class ChatScreen(Widget):
                 mname = mgr.active_model_override or (p.default_model if p else "")
             else:
                 h = mgr.get_healthiest_provider()
-                pname = f"auto ({h.name})" if h else "auto"
+                pname = f"Auto ({h.name})" if h else "Auto"
                 mname = mgr.active_model_override or (h.default_model if h else "")
-            info = f"[dim]{pname}[/dim]  [#2d2d2d].[/#2d2d2d]  [dim]{mname}[/dim]  [#2d2d2d].[/#2d2d2d]  [dim]{self._app.project_id}/{self._app.session_id}[/dim]"
-            self.query_one("#header-info", Label).update(info)
+            return f"[bold #d4a843]Chat[/bold #d4a843]  .  [dim]{pname}  .  {mname}  .  Athena Zen[/dim]"
         except Exception:
-            pass
+            return "[bold #d4a843]Chat[/bold #d4a843]  .  [dim]Athena Zen[/dim]"
 
     def _refresh_status(self) -> None:
-        try:
-            agent = self._app.agent
-            if agent and agent.scl:
-                scl = agent.scl
-                pressure = scl.get_context_pressure()
-                topics = scl.get_active_topics(top_n=20)
-                active_count = sum(1 for t in topics if t["status"] == "ACTIVE")
-                pct = int(pressure * 100)
-                color = "#22c55e" if pct < 70 else "#f59e0b" if pct < 85 else "#ef4444"
-                left = (
-                    f"[{color}]{pct}% pressure[/{color}]"
-                    f"  [#2d2d2d].[/#2d2d2d]"
-                    f"  [dim]{active_count} active topics[/dim]"
-                )
-                self.query_one("#status-left", Label).update(left)
-        except Exception:
-            pass
+        st = self._get_status_text()
+        self.query_one("#welcome-status", Label).update(RText.from_markup(st))
+        self.query_one("#dock-status", Label).update(RText.from_markup(st))
 
-    @on(Input.Changed, "#chat-input")
+    def _switch_to_chat_mode(self) -> None:
+        if not self._in_chat_mode:
+            self._in_chat_mode = True
+            self.query_one("#welcome-view").display = False
+            self.query_one("#chat-view").display = True
+            self.query_one("#dock-input", Input).focus()
+
+    @on(Input.Changed)
     def _on_input_changed(self, event: Input.Changed) -> None:
         val = event.value
         menu = self.query_one(SlashMenu)
@@ -496,13 +545,15 @@ class ChatScreen(Widget):
         else:
             menu.display = False
 
-    @on(Input.Submitted, "#chat-input")
+    @on(Input.Submitted)
     def _on_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
-        inp = self.query_one("#chat-input", Input)
-        inp.value = ""
+
+        self.query_one("#welcome-input", Input).value = ""
+        self.query_one("#dock-input", Input).value = ""
+
         menu = self.query_one(SlashMenu)
         if menu.display and menu.has_matches():
             selected = menu.get_selected()
@@ -532,6 +583,9 @@ class ChatScreen(Widget):
         if cmd in {"/exit", "/quit", "exit", "quit"}:
             self._app.exit()
             return
+
+        self._switch_to_chat_mode()
+
         if cmd.startswith("/"):
             self._dispatch_slash(stripped, cmd)
         else:
@@ -744,20 +798,20 @@ class ChatScreen(Widget):
                     mgr.active_model_override = target
                     mgr.save_providers()
                     log.write(RText.from_markup(f"[#22c55e]Model set to '{target}'.[/#22c55e]\n"))
-                self._refresh_header()
+                self._refresh_status()
 
         else:
-            log.write(RText.from_markup(f"[#374151]Unknown command: {raw}[/#374151]\n"))
+            log.write(RText.from_markup(f"[#71717a]Unknown command: {raw}[/#71717a]\n"))
 
         self._refresh_status()
 
     def _emit_user_message(self, text: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write(RText.from_markup(f"\n[bold #22c55e]You[/bold #22c55e]  [dim]--[/dim]  {text}\n"))
+        log.write(RText.from_markup(f"\n[bold #22c55e]You[/bold #22c55e]  [dim].[/dim]  {text}\n"))
 
     def _emit_athena_message(self, text: str) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write(RText.from_markup(f"[bold #d4a843]Athena[/bold #d4a843]  [dim]--[/dim]\n"))
+        log.write(RText.from_markup(f"[bold #d4a843]Athena[/bold #d4a843]\n"))
         log.write(text + "\n")
 
     def _emit_error(self, text: str) -> None:
@@ -765,10 +819,12 @@ class ChatScreen(Widget):
         log.write(RText.from_markup(f"[bold #ef4444]Error[/bold #ef4444]  {text}\n"))
 
     def _set_thinking(self, thinking: bool) -> None:
-        row = self.query_one("#thinking-row")
-        row.display = thinking
-        inp = self.query_one("#chat-input", Input)
-        inp.disabled = thinking
+        lbl = self.query_one("#thinking-label")
+        lbl.display = thinking
+        inp1 = self.query_one("#welcome-input", Input)
+        inp2 = self.query_one("#dock-input", Input)
+        inp1.disabled = thinking
+        inp2.disabled = thinking
 
     @work(thread=True)
     def _run_agent(self, user_input: str) -> None:
@@ -789,7 +845,9 @@ class ChatScreen(Widget):
             self.app.call_from_thread(self._set_thinking, False)
             self.app.call_from_thread(self._emit_error, str(exc))
         finally:
-            self.app.call_from_thread(lambda: self.query_one("#chat-input", Input).focus())
+            self.app.call_from_thread(
+                lambda: self.query_one("#dock-input" if self._in_chat_mode else "#welcome-input", Input).focus()
+            )
 
 
 class AthenaApp(App):
@@ -810,7 +868,7 @@ class AthenaApp(App):
         self.agent: Optional[AthenaAgent] = None
 
     def compose(self) -> ComposeResult:
-        yield ChatScreen(self)
+        yield MainAppScreen(self)
 
     def on_mount(self) -> None:
         try:
@@ -829,24 +887,23 @@ class AthenaApp(App):
             pass
         self.agent = AthenaAgent(project_id=self.project_id, session_id=self.session_id)
         try:
-            chat = self.query_one(ChatScreen)
-            chat._refresh_header()
-            chat._refresh_status()
+            screen = self.query_one(MainAppScreen)
+            screen._refresh_status()
         except Exception:
             pass
 
     def action_command_palette(self) -> None:
-        chat = self.query_one(ChatScreen)
+        chat = self.query_one(MainAppScreen)
         self.push_screen(CommandPaletteScreen(chat))
 
     def action_new_chat(self) -> None:
-        self.query_one(ChatScreen).execute_command("/newchat")
+        self.query_one(MainAppScreen).execute_command("/newchat")
 
     def action_providers(self) -> None:
-        self.query_one(ChatScreen).execute_command("/providers")
+        self.query_one(MainAppScreen).execute_command("/providers")
 
     def action_interrupt_agent(self) -> None:
-        self.query_one(ChatScreen)._set_thinking(False)
+        self.query_one(MainAppScreen)._set_thinking(False)
 
 
 def run(project_id: str = "default", session_id: str = "session_1") -> None:

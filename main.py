@@ -746,7 +746,8 @@ def show_logs(lines: int = 40):
 
 def main():
     parser = argparse.ArgumentParser(description="Athena v1: The Memory-First AI Agent.")
-    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep", "rollback"], help="Command to run")
+    parser.add_argument("command", choices=["chat", "doctor", "onboard", "logs", "sweep", "rollback", "server"], help="Command to run")
+    parser.add_argument("--port", type=int, default=8080, help="Port for API server (default: 8080)")
     parser.add_argument("--project", default="default", help="Project namespace scope (default: default)")
     parser.add_argument("--session", default="session_1", help="Session ID (default: session_1)")
     parser.add_argument("--no-tui", action="store_true", help="Use legacy plain-text chat loop instead of TUI")
@@ -814,6 +815,9 @@ def main():
         if args.stats or args.all or (not args.stats and not args.skip):
             learning_engine.reset_query_statistics()
             console.print("[bold green][OK] Query statistics reset completed.[/bold green]")
+    elif args.command == "server":
+        import api_server
+        api_server.start_api_server(port=args.port)
     elif args.command == "chat":
         if getattr(args, "no_tui", False):
             run_chat_loop(args.project, args.session)
