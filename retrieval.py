@@ -57,9 +57,10 @@ def retrieve_relevant_memories(query: str, scope_ids: list, limit: int = 5) -> s
     try:
         cursor = conn.cursor()
         # Query all non-archived facts
+        # Query candidate facts ordering by importance and updated_at
         cursor.execute("""
             SELECT id, fact, category, importance, confidence, decay_rate, scope_ids, mention_count, updated_at
-            FROM facts WHERE archived = 0
+            FROM facts WHERE archived = 0 ORDER BY importance DESC, updated_at DESC LIMIT 500
         """)
         rows = cursor.fetchall()
         
@@ -81,19 +82,21 @@ def retrieve_relevant_memories(query: str, scope_ids: list, limit: int = 5) -> s
             imp_norm = float(importance) / 10.0
             
             # Recency penalty (lower penalty for more recent facts)
-            # Days elapsed / 30 days scale
             days_elapsed = (now - updated_at) / 86400.0
-            recency_penalty = min(0.5, days_elapsed / 30.0) # Cap penalty at 0.5
+            recency_penalty = min(0.2, (days_elapsed / 30.0) * 0.2)
             
-            # Scope bonus
+            # Graduated scope bonus
             try:
                 fact_scopes = json.loads(scopes_json)
             except Exception:
                 fact_scopes = []
-            has_scope_overlap = any(s in fact_scopes for s in scopes)
-            scope_bonus = 0.5 if has_scope_overlap else 0.0
+            matching_scopes = len([s for s in fact_scopes if s in scopes or s == "global"])
+            total_fact_scopes = max(1, len(fact_scopes))
+            scope_bonus = (matching_scopes / total_fact_scopes) * 0.3
             
-            composite_score = (kw_score * w_k) + (imp_norm * w_i) + (confidence * w_c) - recency_penalty + scope_bonus
+            # Normalized weighted composite scoring (0.5 keyword, 0.3 importance, 0.2 confidence)
+            composite_score = (kw_score * 0.5 * w_k) + (imp_norm * 0.3 * w_i) + (confidence * 0.2 * w_c) - recency_penalty + scope_bonus
+
             
             scored_facts.append({
                 "id": row_id,

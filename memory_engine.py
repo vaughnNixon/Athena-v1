@@ -225,8 +225,8 @@ def insert_or_reinforce_fact(
                 if row:
                     row_id, old_importance, old_confidence, old_scopes_json, old_mentions = row
                     
-                    # Reinforce metrics
-                    new_mentions = old_mentions + 1
+                    # Reinforce metrics (cap mentions at 1000 to prevent unbounded growth)
+                    new_mentions = min(1000, old_mentions + 1)
                     new_importance = min(10, old_importance + 1)
                     new_confidence = min(1.0, old_confidence + 0.1)
                     
@@ -234,9 +234,11 @@ def insert_or_reinforce_fact(
                     try:
                         old_scopes = json.loads(old_scopes_json)
                         if not isinstance(old_scopes, list):
-                            old_scopes = []
+                            old_scopes = ["global"]
                     except Exception:
-                        old_scopes = []
+                        logger.warning("Corrupted scopes JSON for fact_hash %s, resetting to global", fact_hash)
+                        old_scopes = ["global"]
+
                     for s in scopes:
                         if s not in old_scopes:
                             old_scopes.append(s)

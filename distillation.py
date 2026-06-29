@@ -44,16 +44,16 @@ def _run_distillation(user_msg: str, agent_msg: str, scope_ids: list):
         
     prompt = (
         "You are the distillation engine for Athena v1, a memory-first agent.\n"
-        "Your objective: Extract important facts from the conversation, ignore greetings, and return compact knowledge.\n"
+        "Your objective: Extract important facts from the conversation, rate their importance and confidence, and return compact knowledge.\n"
         "Input:\n"
         f"User: {user_msg}\n"
         f"Agent: {agent_msg}\n\n"
         "Instructions:\n"
         "- Identify any new statements of facts, user preferences, strategies, decisions, or system settings.\n"
         "- Ignore greetings, small talk, and polite padding.\n"
-        "- Return the output as a valid raw JSON object with a single key 'facts' containing a list of strings.\n"
-        "- Keep each fact concise, clear, and context-independent.\n"
-        "Example output: {\"facts\": [\"User is running on Windows 11.\", \"Default database port is 5432.\"]}"
+        "- Return the output as a valid raw JSON object with a single key 'facts' containing a list of objects.\n"
+        "- Each object must have: 'text' (string), 'importance' (int 1-10), and 'confidence' (float 0.0-1.0).\n"
+        "Example output: {\"facts\": [{\"text\": \"User runs Windows 11.\", \"importance\": 7, \"confidence\": 0.95}]}"
     )
     
     try:
@@ -64,7 +64,8 @@ def _run_distillation(user_msg: str, agent_msg: str, scope_ids: list):
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.0
+            temperature=0.0,
+            timeout=5.0
         )
         content = response.choices[0].message.content
         providers.record_success(provider)
@@ -73,17 +74,26 @@ def _run_distillation(user_msg: str, agent_msg: str, scope_ids: list):
         data = json.loads(content)
         facts = data.get("facts", [])
         
-        for fact in facts:
-            fact_str = str(fact).strip()
+        for fact_obj in facts:
+            if isinstance(fact_obj, dict):
+                fact_str = str(fact_obj.get("text", "")).strip()
+                imp = int(fact_obj.get("importance", 5))
+                conf = float(fact_obj.get("confidence", 0.8))
+            else:
+                fact_str = str(fact_obj).strip()
+                imp = 5
+                conf = 0.8
+                
             if fact_str:
                 result = memory_engine.insert_or_reinforce_fact(
                     fact=fact_str,
                     category="general",
-                    importance=5, # default
-                    confidence=0.8,
+                    importance=imp,
+                    confidence=conf,
                     scope_ids=scope_ids
                 )
                 logger.info("Fact distillation result (%s): %s", result, fact_str[:40])
     except Exception as exc:
         logger.error("Failed to run fact distillation: %s", exc)
         providers.record_failure(provider)
+

@@ -339,12 +339,17 @@ class ProvidersManager:
         p.stats["consecutive_failures"] = p.stats.get("consecutive_failures", 0) + 1
         p.stats["last_failure"] = time.time()
         
+        # Check if error is permanent (401 unauthorized, 403 forbidden)
+        err_str = str(error) if error else ""
+        is_permanent = "401" in err_str or "403" in err_str or "unauthorized" in err_str.lower() or "forbidden" in err_str.lower()
+        fail_inc = 999 if is_permanent else 1
+        
         if key and key in p.key_stats:
-            p.key_stats[key]["failures"] += 1
+            p.key_stats[key]["failures"] += fail_inc
             p.key_stats[key]["last_failure"] = time.time()
         elif key:
             p.key_stats[key] = {
-                "failures": 1,
+                "failures": fail_inc,
                 "successes": 0,
                 "last_success": None,
                 "last_failure": time.time()
@@ -353,3 +358,4 @@ class ProvidersManager:
 
 def get_manager() -> ProvidersManager:
     return ProvidersManager()
+
