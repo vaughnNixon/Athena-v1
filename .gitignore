@@ -25,9 +25,10 @@ config.yaml
 logs/
 sessions/
 
-# Personal Memories & Reports (Excluded from Git)
-knowledge/
-reports/
+# Personal Memory logs (Ignore user .md files, preserve directory templates via .gitkeep)
+knowledge/**/*.md
+knowledge/*.md
+reports/*.md
 *.sqlite
 
 # TUI Backup (Excluded from Git)
