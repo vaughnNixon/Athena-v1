@@ -194,6 +194,12 @@ class AthenaAgent:
         if people_ctx:
             system_prompt = system_prompt + "\n\n" + people_ctx
 
+        # Check for decision records context (ADRs)
+        import decisions_manager
+        decisions_ctx = decisions_manager.get_relevant_decisions_context(user_message)
+        if decisions_ctx:
+            system_prompt = system_prompt + "\n\n" + decisions_ctx
+
         
         # 2. Add user message to local history
         self.history.append({"role": "user", "content": user_message})
