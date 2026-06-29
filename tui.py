@@ -133,7 +133,6 @@ Screen {
     height: 1;
     margin-top: 1;
     color: #71717a;
-    font-size: 13;
 }
 
 #welcome-sub-bar {
