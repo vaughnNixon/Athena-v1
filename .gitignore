@@ -17,13 +17,18 @@ env/
 *.sln
 *.swp
 
-# Local env files (just in case)
+# Secrets & Local credentials
 .env
 .env.*
 config.yaml
 *.db
 logs/
 sessions/
+
+# Personal Memories & Reports (Excluded from Git)
 knowledge/
-skills/
-athena_v1.db
+reports/
+*.sqlite
+
+# TUI Backup (Excluded from Git)
+tui_opencode_backup.py
