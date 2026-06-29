@@ -712,6 +712,18 @@ def run_chat_loop(project_id: str, session_id: str):
                         console.print("[dim]No artifacts were produced by the subagent.[/dim]")
                 continue
 
+            if cmd_lower.startswith("/report"):
+                import monthly_report
+                parts = stripped_input.split()
+                ym = parts[1] if len(parts) > 1 and parts[1].lower() not in ("month", "current") else None
+                rep_content = monthly_report.generate_monthly_report(year_month=ym)
+                ym_str = ym if ym else datetime.now().strftime("%Y-%m")
+                rep_path = monthly_report.get_report_path(ym_str)
+                console.print(f"[bold green]✓ Monthly Report generated successfully at [cyan]{rep_path}[/cyan][/bold green]\n")
+                console.print(Panel(rep_content[:500] + "\n\n[dim]... (Full report saved to file)[/dim]", title=f"Monthly Report ({ym_str})", border_style="gold3"))
+                continue
+
+
 
             # Process turn with graceful Ctrl+C interrupt handler
             console.print("[dim]Athena is thinking... (Press Ctrl+C to stop)[/dim]", end="\r")
