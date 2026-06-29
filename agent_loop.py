@@ -93,7 +93,7 @@ class AthenaAgent:
                     daemon=True
                 ).start()
             
-            # Phase 2: Synthesize raw subagent result using LLM if execution succeeded
+            # Phase 2: Synthesize raw subagent result using LLM
             final_output = result.user_output
             if result.aal_summary.get("outcome") == "success" and result.user_output:
                 try:
@@ -118,6 +118,17 @@ class AthenaAgent:
                         final_output = synth_resp["content"]
                 except Exception as synth_exc:
                     logger.warning("Failed to synthesize subagent output via LLM: %s", synth_exc)
+            elif result.aal_summary.get("outcome") == "failed":
+                try:
+                    synth_messages = [
+                        {"role": "system", "content": "You are Athena, a helpful companion. The subagent task execution encountered an error or requested a skill that is not currently installed on this machine. Respond warmly, politely, and naturally in plain English explaining what you can or cannot do right now, without dumping raw technical Python error strings or internal class names."},
+                        {"role": "user", "content": f"User query: '{user_message}'\n\nInternal Error Note: {result.user_output}"}
+                    ]
+                    synth_resp = self._call_llm_with_tools(messages=synth_messages, enable_tools=False)
+                    if synth_resp.get("content"):
+                        final_output = synth_resp["content"]
+                except Exception as synth_exc:
+                    logger.warning("Failed to synthesize subagent failure output: %s", synth_exc)
 
             # Store user message and synthesized result in history
             self.history.append({"role": "user", "content": user_message})

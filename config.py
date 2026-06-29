@@ -1,4 +1,5 @@
 import os
+import sys
 import yaml
 import urllib.request
 import logging
@@ -120,6 +121,7 @@ def load_env() -> dict:
     return env_vars
 
 def fetch_caveman_skills(force: bool = False):
+    import threading
     ensure_athena_dirs()
     skills_dir = get_athena_home() / "skills" / "caveman"
     
@@ -128,27 +130,32 @@ def fetch_caveman_skills(force: bool = False):
         "caveman-commit.md": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman-commit/SKILL.md",
         "caveman-review.md": "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman-review/SKILL.md"
     }
-    
-    for filename, url in files_to_fetch.items():
-        filepath = skills_dir / filename
-        if filepath.exists() and not force:
-            continue
-        try:
-            logger.info("Fetching Caveman skill: %s", filename)
-            req = urllib.request.Request(
-                url, 
-                headers={"User-Agent": "Mozilla/5.0 (AthenaAgent/1.0)"}
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                content = response.read().decode("utf-8")
-                filepath.write_text(content, encoding="utf-8")
-        except Exception as exc:
-            logger.warning("Could not fetch Caveman skill %s from GitHub: %s. Using local fallback.", filename, exc)
-            # Write fallback brief instruction if file doesn't exist
-            if not filepath.exists():
-                filepath.write_text(
-                    f"# Caveman Skill Fallback: {filename}\n"
-                    "Instructions: Adopt a highly compressed, sparse, telegraphic prose style. "
-                    "Remove greetings and conversational padding. Do not write full prose sentences.",
-                    encoding="utf-8"
+
+    def _do_fetch():
+        for filename, url in files_to_fetch.items():
+            filepath = skills_dir / filename
+            if filepath.exists() and not force:
+                continue
+            try:
+                logger.info("Fetching Caveman skill: %s", filename)
+                req = urllib.request.Request(
+                    url, 
+                    headers={"User-Agent": "Mozilla/5.0 (AthenaAgent/1.0)"}
                 )
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    content = response.read().decode("utf-8")
+                    filepath.write_text(content, encoding="utf-8")
+            except Exception as exc:
+                logger.warning("Could not fetch Caveman skill %s from GitHub: %s. Using local fallback.", filename, exc)
+                if not filepath.exists():
+                    filepath.write_text(
+                        f"# Caveman Skill Fallback: {filename}\n"
+                        "Instructions: Adopt a highly compressed, sparse, telegraphic prose style. "
+                        "Remove greetings and conversational padding. Do not write full prose sentences.",
+                        encoding="utf-8"
+                    )
+
+    if "pytest" in sys.modules:
+        _do_fetch()
+    else:
+        threading.Thread(target=_do_fetch, daemon=True).start()
