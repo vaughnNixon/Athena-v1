@@ -153,14 +153,18 @@ def handle_report_correction(user_correction: str, year_month: str = None) -> st
     except Exception as e:
         logger.warning("Memory gate correction processing skipped/failed: %s", e)
         
-    # Update report content
-    existing_text = report_path.read_text(encoding="utf-8")
+    # Re-generate report fresh from updated SQLite source of truth
+    updated_text = generate_monthly_report(year_month)
+    
+    # Append user correction verification note to Notes section if not present
     note_addition = f"- [User Correction Verified]: {user_correction}"
-    if "## Notes\n\n" in existing_text:
-        updated_text = existing_text.replace("## Notes\n\n", f"## Notes\n\n{note_addition}\n")
-    else:
-        updated_text = existing_text + f"\n\n## Notes\n\n{note_addition}\n"
+    if note_addition not in updated_text:
+        if "## Notes\n\n" in updated_text:
+            updated_text = updated_text.replace("## Notes\n\n", f"## Notes\n\n{note_addition}\n")
+        else:
+            updated_text = updated_text + f"\n\n## Notes\n\n{note_addition}\n"
+        report_path.write_text(updated_text, encoding="utf-8")
         
-    report_path.write_text(updated_text, encoding="utf-8")
     logger.info("Updated monthly report at %s with correction.", report_path)
     return updated_text
+
